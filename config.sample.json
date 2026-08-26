@@ -1,0 +1,50 @@
+{
+  "env": "sandbox",
+  "listen": "127.0.0.1:8090",
+  "publicUrl": "",
+  "apiKey": "${NHCX_GATEWAY_API_KEY}",
+  "participant": {
+    "participantId": "1000003463@hcx",
+    "clientId": "${NHCX_CLIENT_ID}",
+    "clientSecret": "${NHCX_CLIENT_SECRET}",
+    "privateKey": "@private_key.pem"
+  },
+  "callback": {
+    "url": "http://127.0.0.1:8765/nhcx/callback",
+    "appendPath": true,
+    "timeoutSeconds": 20,
+    "apiKey": "",
+    "routes": {}
+  },
+  "certificate": {
+    "validityDays": 365,
+    "privateKeyFile": "private_key.pem",
+    "certificateFile": "certificate.pem"
+  },
+  "ledger": {
+    "enabled": true,
+    "dir": "data/ledger",
+    "retentionDays": 30,
+    "storeBodies": true
+  },
+  "urls": {
+    "nhcx": "",
+    "participant": "",
+    "sessions": ""
+  },
+  "auth": {
+    "mode": "sessions",
+    "tokenTtlSeconds": 1200
+  },
+  "certs": {
+    "cacheHours": 24
+  },
+  "tls": {
+    "certFile": "",
+    "keyFile": ""
+  },
+  "log": {
+    "level": "info",
+    "format": ""
+  }
+}

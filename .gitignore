@@ -1,0 +1,16 @@
+# build output
+nhcx-gateway
+nhcx-gateway.exe
+dist/
+
+# local config and key material — never commit these
+config.json
+*.pem
+*.pem.bak-*
+*.key
+*.crt
+
+.DS_Store
+
+# ledger records (contain FHIR bundles)
+data/
