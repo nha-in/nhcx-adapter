@@ -33,6 +33,7 @@ import (
 	"nhcx-gateway/internal/abdm"
 	"nhcx-gateway/internal/gateway"
 	"nhcx-gateway/internal/ledger"
+	"nhcx-gateway/internal/nhcx"
 	"nhcx-gateway/internal/probe"
 )
 
@@ -69,6 +70,25 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /in/healthz", s.healthz)
 	mux.HandleFunc("GET /readyz", s.readyz)
 	mux.HandleFunc("POST /out/{path...}", s.requireAPIKey(s.outbound))
+	// hcxkit publishes the same thing under /fhir/out, and the apps written
+	// against the kit send there. Same handler, same body — only the prefix
+	// differs, so accepting both means a backend can be pointed at either
+	// gateway without a code change.
+	mux.HandleFunc("POST /fhir/out/{path...}", s.requireAPIKey(s.outbound))
+	// The sliver of hcxkit's /internal console API a kit client needs before
+	// it can send at all — see kitcompat.go.
+	mux.HandleFunc("GET /internal/config/get", s.kitConfig)
+	mux.HandleFunc("POST /internal/participants/search", s.kitParticipantSearch)
+	mux.HandleFunc("POST /internal/txn/related", s.kitTxnRelated)
+	mux.HandleFunc("POST /internal/txn/fhir", s.kitTxnFHIR)
+	mux.HandleFunc("POST /internal/txn/dispatch", s.kitTxnDispatch)
+	mux.HandleFunc("GET /internal/txn/list", s.kitTxnList)
+	mux.HandleFunc("POST /internal/policies/search", s.kitPolicySearch)
+	mux.HandleFunc("POST /internal/policies/abha/link", s.kitAbhaLink)
+	mux.HandleFunc("POST /internal/policies/abha/delink", s.kitAbhaDelink)
+	mux.HandleFunc("POST /internal/participants/list", s.kitParticipantsList)
+	mux.HandleFunc("POST /internal/participants/certs", s.kitParticipantCerts)
+	mux.HandleFunc("GET /internal/participants/saved", s.kitSavedParticipants)
 	mux.HandleFunc("GET /ledger", s.requireAPIKey(s.ledgerList))
 	mux.HandleFunc("GET /ledger/stats", s.requireAPIKey(s.ledgerStats))
 	mux.HandleFunc("GET /ledger/thread/{cid}", s.requireAPIKey(s.ledgerThread))
@@ -122,12 +142,17 @@ func (s *Server) Run(ctx context.Context) error {
 }
 
 func (s *Server) tokenLoop(ctx context.Context) {
-	client := s.gw.ABDM()
+	// Every hosted participant needs a live session, not just the default:
+	// one with credentials of its own has a session of its own. Profiles
+	// that inherit the default's credentials share its token, so this is a
+	// cache hit for them rather than a second round trip.
 	refresh := func() {
 		tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		if _, err := client.Token(tctx); err != nil {
-			s.log.Error("session token refresh failed", "error", err.Error())
+		for _, prof := range s.gw.Profiles().All() {
+			if _, err := s.gw.ABDMFor(prof.Code()).Token(tctx); err != nil {
+				s.log.Error("session token refresh failed", "participant", prof.Code(), "error", err.Error())
+			}
 		}
 	}
 	refresh()
@@ -298,7 +323,18 @@ func (s *Server) readyz(w http.ResponseWriter, r *http.Request) {
 // With refresh the cached token is discarded first.
 func (s *Server) token(refresh bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// ?participant=<code> asks for that hosted identity's session. An
+		// unknown code is an error rather than a silent fallback: handing
+		// back the wrong participant's token would fail confusingly later.
 		client := s.gw.ABDM()
+		if code := r.URL.Query().Get("participant"); code != "" {
+			if s.gw.Profiles().ByCode(code) == nil {
+				s.fail(w, r, &abdm.Error{Code: "UNKNOWN_PARTICIPANT", Status: http.StatusNotFound,
+					Message: "no participant " + code + " is configured; this gateway holds " + strings.Join(s.gw.Profiles().Codes(), ", ")})
+				return
+			}
+			client = s.gw.ABDMFor(code)
+		}
 		if refresh {
 			if _, err := client.RefreshToken(r.Context()); err != nil {
 				s.fail(w, r, err)
@@ -312,12 +348,13 @@ func (s *Server) token(refresh bool) http.HandlerFunc {
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, map[string]any{
-			"token":      tok,
-			"token_type": "Bearer",
-			"expires_at": exp.UTC().Format(time.RFC3339),
-			"expires_in": int(time.Until(exp).Seconds()),
-			"refreshed":  refresh,
-			"request_id": requestIDFrom(r),
+			"token":       tok,
+			"token_type":  "Bearer",
+			"expires_at":  exp.UTC().Format(time.RFC3339),
+			"expires_in":  int(time.Until(exp).Seconds()),
+			"refreshed":   refresh,
+			"participant": client.Code(),
+			"request_id":  requestIDFrom(r),
 		})
 	}
 }
@@ -340,6 +377,11 @@ func (s *Server) outbound(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	// txn_id / correlation_id / request_id are hcxkit's acknowledgement
+	// shape. A client written for the kit reads those three and nothing else,
+	// so they are answered alongside this gateway's own fields rather than
+	// instead of them. The ledger id is the transaction id: one stable
+	// identifier per message, which is what the kit's txn_id is used for.
 	writeJSON(w, res.GatewayStatus, map[string]any{
 		"ok":             res.Accepted(),
 		"path":           res.Path,
@@ -349,7 +391,9 @@ func (s *Server) outbound(w http.ResponseWriter, r *http.Request) {
 		"response":       res.Response,
 		"duration_ms":    res.DurationMs,
 		"ledger_id":      res.LedgerID,
-		"request_id":     requestIDFrom(r),
+		"txn_id":         res.LedgerID,
+		"correlation_id": nhcx.GetString(res.Headers, nhcx.HdrCorrelationID),
+		"request_id":     nhcx.GetString(res.Headers, nhcx.HdrRequestID),
 	})
 }
 
@@ -511,7 +555,13 @@ func (s *Server) recover(next http.Handler) http.Handler {
 // requireAPIKey guards /out with the configured bearer key. Without a key
 // configured the surface is open — ValidateServe refuses that in production.
 func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
-	key := s.gw.Config().APIKey
+	cfg := s.gw.Config()
+	key := cfg.APIKey
+	// In sandbox the key is accepted but not demanded — see
+	// config.APIKeyRequired for why.
+	if !cfg.APIKeyRequired() {
+		key = ""
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if key != "" {
 			got := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer"))

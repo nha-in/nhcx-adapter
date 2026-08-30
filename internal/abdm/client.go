@@ -1,7 +1,14 @@
 // Package abdm is the gateway's client for the ABDM side of NHCX: session
 // tokens, the participant registry (recipient certificates) and the exchange
-// gateway itself. Everything is synchronous and in-memory: one token, one
-// certificate cache, no persistence.
+// gateway itself. Everything is synchronous and in-memory, with no
+// persistence.
+//
+// A gateway that hosts several participants gets one Client per profile, all
+// sharing a Pool. What they share is deliberate: certificates describe a
+// counterparty, not us, so one cache serves every profile; session tokens are
+// issued per credential, so they are keyed by clientId and profiles that
+// inherit the default's credentials share its token rather than opening a
+// second session for the same client.
 package abdm
 
 import (
@@ -24,6 +31,7 @@ import (
 	"nhcx-gateway/internal/config"
 	"nhcx-gateway/internal/keys"
 	"nhcx-gateway/internal/nhcx"
+	"nhcx-gateway/internal/participant"
 )
 
 // Error is a typed failure with a stable code the HTTP surface and the CLI
@@ -57,19 +65,24 @@ func AsError(err error) *Error {
 
 const maxErrBody = 4096
 
-// Client talks to ABDM for one participant.
-type Client struct {
-	cfg  *config.Config
-	http *http.Client
-	log  *slog.Logger
+// Pool is what every participant's client shares: the configuration, the set
+// of local identities, one certificate cache and one token cache.
+type Pool struct {
+	cfg    *config.Config
+	locals *participant.Set
+	log    *slog.Logger
+	http   *http.Client
 
-	tokenMu  sync.Mutex
-	token    string
-	tokenExp time.Time
+	tokenMu sync.Mutex
+	tokens  map[string]*tokenEntry // credential key -> session
 
 	certMu sync.RWMutex
 	certs  map[string]certEntry
-	own    *rsa.PublicKey
+}
+
+type tokenEntry struct {
+	token   string
+	expires time.Time
 }
 
 type certEntry struct {
@@ -78,24 +91,66 @@ type certEntry struct {
 	expires time.Time
 }
 
-// New builds a client. own is this participant's public key: a registry
-// answer carrying it for some other code is refused, because a payload
-// encrypted for ourselves is unreadable at the far end.
-func New(cfg *config.Config, own *rsa.PublicKey, logger *slog.Logger) *Client {
+// NewPool builds the shared state for a gateway's clients.
+func NewPool(cfg *config.Config, locals *participant.Set, logger *slog.Logger) *Pool {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Client{
-		cfg:   cfg,
-		http:  &http.Client{Timeout: time.Duration(cfg.OutboundTimeoutSeconds) * time.Second},
-		log:   logger,
-		certs: make(map[string]certEntry),
-		own:   own,
+	return &Pool{
+		cfg:    cfg,
+		locals: locals,
+		log:    logger,
+		http:   &http.Client{Timeout: time.Duration(cfg.OutboundTimeoutSeconds) * time.Second},
+		tokens: make(map[string]*tokenEntry),
+		certs:  make(map[string]certEntry),
 	}
 }
 
-// SetHTTPClient swaps the underlying transport (tests).
-func (c *Client) SetHTTPClient(h *http.Client) { c.http = h }
+// For returns the client that acts as prof.
+func (p *Pool) For(prof *participant.Profile) *Client { return &Client{pool: p, prof: prof} }
+
+// SetHTTPClient swaps the transport every client in the pool uses (tests).
+func (p *Pool) SetHTTPClient(h *http.Client) { p.http = h }
+
+// Client talks to ABDM as one participant.
+type Client struct {
+	pool *Pool
+	prof *participant.Profile
+}
+
+// Profile is the identity this client acts as.
+func (c *Client) Profile() *participant.Profile { return c.prof }
+
+// Code is the participant code this client acts as.
+func (c *Client) Code() string {
+	if c.prof == nil {
+		return ""
+	}
+	return c.prof.Code()
+}
+
+// credentials returns the clientId/clientSecret this client authenticates
+// with, and the cache key its session token is stored under. Profiles that
+// inherit the default's credentials therefore share one session.
+func (c *Client) credentials() (id, secret, key string) {
+	if c.prof != nil {
+		id, secret = c.prof.Participant.ClientID, c.prof.Participant.ClientSecret
+	}
+	if id == "" {
+		id, secret = c.pool.cfg.Participant.ClientID, c.pool.cfg.Participant.ClientSecret
+	}
+	key = id
+	if key == "" {
+		// No credentials anywhere: keep the profiles apart rather than
+		// letting them collide on the empty key.
+		key = "\x00" + c.Code()
+	}
+	return id, secret, key
+}
+
+// SetHTTPClient swaps the underlying transport (tests). It affects every
+// client in the pool.
+func (c *Client) SetHTTPClient(h *http.Client) { c.pool.SetHTTPClient(h) }
 
 // ---------------------------------------------------------------- token ----
 
@@ -103,10 +158,11 @@ func (c *Client) SetHTTPClient(h *http.Client) { c.http = h }
 // cached one is missing or within a minute of expiry. Concurrent callers
 // share one fetch.
 func (c *Client) Token(ctx context.Context) (string, error) {
-	c.tokenMu.Lock()
-	defer c.tokenMu.Unlock()
-	if c.token != "" && time.Until(c.tokenExp) > time.Minute {
-		return c.token, nil
+	c.pool.tokenMu.Lock()
+	defer c.pool.tokenMu.Unlock()
+	_, _, key := c.credentials()
+	if e := c.pool.tokens[key]; e != nil && e.token != "" && time.Until(e.expires) > time.Minute {
+		return e.token, nil
 	}
 	return c.fetchTokenLocked(ctx)
 }
@@ -117,23 +173,29 @@ func (c *Client) TokenInfo(ctx context.Context) (token string, expiresAt time.Ti
 	if _, err = c.Token(ctx); err != nil {
 		return "", time.Time{}, err
 	}
-	c.tokenMu.Lock()
-	defer c.tokenMu.Unlock()
-	return c.token, c.tokenExp, nil
+	c.pool.tokenMu.Lock()
+	defer c.pool.tokenMu.Unlock()
+	_, _, key := c.credentials()
+	if e := c.pool.tokens[key]; e != nil {
+		return e.token, e.expires, nil
+	}
+	return "", time.Time{}, nil
 }
 
 // RefreshToken discards the cached token and fetches a new one.
 func (c *Client) RefreshToken(ctx context.Context) (string, error) {
-	c.tokenMu.Lock()
-	defer c.tokenMu.Unlock()
+	c.pool.tokenMu.Lock()
+	defer c.pool.tokenMu.Unlock()
 	return c.fetchTokenLocked(ctx)
 }
 
 // TokenValid reports whether a usable token is cached (readiness probe).
 func (c *Client) TokenValid() bool {
-	c.tokenMu.Lock()
-	defer c.tokenMu.Unlock()
-	return c.token != "" && time.Now().Before(c.tokenExp)
+	c.pool.tokenMu.Lock()
+	defer c.pool.tokenMu.Unlock()
+	_, _, key := c.credentials()
+	e := c.pool.tokens[key]
+	return e != nil && e.token != "" && time.Now().Before(e.expires)
 }
 
 func (c *Client) fetchTokenLocked(ctx context.Context) (string, error) {
@@ -141,29 +203,30 @@ func (c *Client) fetchTokenLocked(ctx context.Context) (string, error) {
 		req *http.Request
 		err error
 	)
-	switch c.cfg.Auth.Mode {
+	clientID, clientSecret, cacheKey := c.credentials()
+	switch c.cfg().Auth.Mode {
 	case "get-session":
 		form := url.Values{
-			"client_id":     {c.cfg.Participant.ClientID},
-			"client_secret": {c.cfg.Participant.ClientSecret},
+			"client_id":     {clientID},
+			"client_secret": {clientSecret},
 			"grant_type":    {"client_credentials"},
 		}
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URLs.Sessions, strings.NewReader(form.Encode()))
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, c.cfg().URLs.Sessions, strings.NewReader(form.Encode()))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
 	default:
 		body, _ := json.Marshal(map[string]string{
-			"clientId":     c.cfg.Participant.ClientID,
-			"clientSecret": c.cfg.Participant.ClientSecret,
+			"clientId":     clientID,
+			"clientSecret": clientSecret,
 			"grantType":    "client_credentials",
 		})
-		req, err = http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URLs.Sessions, bytes.NewReader(body))
+		req, err = http.NewRequestWithContext(ctx, http.MethodPost, c.cfg().URLs.Sessions, bytes.NewReader(body))
 		if err == nil {
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("REQUEST-ID", uuid.New().String())
 			req.Header.Set("TIMESTAMP", time.Now().UTC().Format(time.RFC3339))
-			req.Header.Set("X-CM-ID", c.cfg.CMID)
+			req.Header.Set("X-CM-ID", c.cfg().CMID)
 		}
 	}
 	if err != nil {
@@ -172,7 +235,7 @@ func (c *Client) fetchTokenLocked(ctx context.Context) (string, error) {
 	req.Header.Set("Accept", "application/json")
 
 	start := time.Now()
-	resp, err := c.http.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return "", &Error{Code: "TOKEN_UNREACHABLE", Message: "session endpoint unreachable", Retryable: true, Err: err}
 	}
@@ -192,13 +255,13 @@ func (c *Client) fetchTokenLocked(ctx context.Context) (string, error) {
 	if token == "" {
 		return "", &Error{Code: "TOKEN_MISSING", Message: "session response carried no access token", Body: clip(raw)}
 	}
-	ttl := time.Duration(c.cfg.Auth.TokenTTLSeconds) * time.Second
+	ttl := time.Duration(c.cfg().Auth.TokenTTLSeconds) * time.Second
 	if n := firstNumber(out, "expiresIn", "expires_in"); n > 0 {
 		ttl = time.Duration(n) * time.Second
 	}
-	c.token = token
-	c.tokenExp = time.Now().Add(ttl)
-	c.log.Info("session token refreshed", "mode", c.cfg.Auth.Mode, "ttl", ttl.String(), "took", time.Since(start).Round(time.Millisecond).String())
+	c.pool.tokens[cacheKey] = &tokenEntry{token: token, expires: time.Now().Add(ttl)}
+	c.log().Info("session token refreshed", "participant", c.Code(), "mode", c.cfg().Auth.Mode,
+		"ttl", ttl.String(), "took", time.Since(start).Round(time.Millisecond).String())
 	return token, nil
 }
 
@@ -212,9 +275,9 @@ func (c *Client) Certificate(ctx context.Context, code string) (*rsa.PublicKey, 
 	if code == "" {
 		return nil, "", &Error{Code: "NO_RECIPIENT", Message: "participant code is empty"}
 	}
-	c.certMu.RLock()
-	entry, ok := c.certs[strings.ToLower(code)]
-	c.certMu.RUnlock()
+	c.pool.certMu.RLock()
+	entry, ok := c.pool.certs[strings.ToLower(code)]
+	c.pool.certMu.RUnlock()
 	if ok && time.Now().Before(entry.expires) {
 		return entry.key, entry.pem, nil
 	}
@@ -227,7 +290,7 @@ func (c *Client) FetchCertificate(ctx context.Context, code string) (*rsa.Public
 	if code == "" {
 		return nil, "", &Error{Code: "NO_RECIPIENT", Message: "participant code is empty"}
 	}
-	endpoint := strings.TrimRight(c.cfg.URLs.Participant, "/") + "/fetch/certs"
+	endpoint := strings.TrimRight(c.cfg().URLs.Participant, "/") + "/fetch/certs"
 	status, raw, err := c.postWithToken(ctx, endpoint, map[string]string{"participantid": code}, false)
 	if err != nil {
 		return nil, "", err
@@ -252,14 +315,35 @@ func (c *Client) FetchCertificate(ctx context.Context, code string) (*rsa.Public
 	if err != nil {
 		return nil, "", &Error{Code: "CERT_NOT_FOUND", Message: fmt.Sprintf("registry returned no usable certificate for %s: %q", code, clipStr(pem, 120)), Err: err}
 	}
-	if c.own != nil && c.own.Equal(pub) && !nhcx.SameCode(code, c.cfg.Participant.ParticipantID) {
-		return nil, "", &Error{Code: "SELF_ENCRYPTION_KEY", Message: "registry certificate for " + code + " is this gateway's own key; a payload encrypted with it would be unreadable at the far end"}
+	// The registry has handed back one of our own keys for somebody else.
+	// Whether that is fatal depends on where we are — see
+	// config.RefusesSelfKey. It is never fatal for a participant this gateway
+	// hosts itself (a loopback test, or one hosted participant writing to
+	// another): there the local key is genuinely the recipient's key.
+	if c.locals().OwnsKey(pub) && !c.locals().IsLocal(code) {
+		if c.cfg().RefusesSelfKey() {
+			return nil, "", &Error{Code: "SELF_ENCRYPTION_KEY", Message: "registry certificate for " + code + " is this gateway's own key; a payload encrypted with it would be unreadable at the far end"}
+		}
+		c.log().Warn("registry certificate is this gateway's own key",
+			"participant", code,
+			"note", "expected in a sandbox where participants share one certificate; "+
+				"in production this would be unreadable at the far end")
 	}
-	c.certMu.Lock()
-	c.certs[strings.ToLower(code)] = certEntry{pem: pem, key: pub, expires: time.Now().Add(time.Duration(c.cfg.Certs.CacheHours) * time.Hour)}
-	c.certMu.Unlock()
-	c.log.Info("certificate fetched", "participant", code)
+	c.pool.certMu.Lock()
+	c.pool.certs[strings.ToLower(code)] = certEntry{pem: pem, key: pub, expires: time.Now().Add(time.Duration(c.cfg().Certs.CacheHours) * time.Hour)}
+	c.pool.certMu.Unlock()
+	c.log().Info("certificate fetched", "participant", code)
 	return pub, pem, nil
+}
+
+// PostRegistry sends a JSON body to a path on the participant registry with
+// this participant's session token, and hands back the status and raw body.
+// It exists for the registry calls the gateway does not model itself — the
+// policy search a kit client asks for — so they go out with the same token
+// handling, refresh-on-401 and timeouts as everything else.
+func (c *Client) PostRegistry(ctx context.Context, path string, body any) (int, []byte, error) {
+	endpoint := strings.TrimRight(c.cfg().URLs.Participant, "/") + "/" + strings.TrimLeft(path, "/")
+	return c.postWithToken(ctx, endpoint, body, false)
 }
 
 // Participant is a registry record, as far as the gateway cares.
@@ -276,7 +360,7 @@ type Participant struct {
 // /participant/search.
 func (c *Client) FetchParticipant(ctx context.Context, code string) (*Participant, error) {
 	code = nhcx.NormalizeCode(code)
-	endpoint := strings.TrimRight(c.cfg.URLs.Participant, "/") + "/participant/search"
+	endpoint := strings.TrimRight(c.cfg().URLs.Participant, "/") + "/participant/search"
 	status, raw, err := c.postWithToken(ctx, endpoint, map[string]string{"participant_code": code, "participantcode": code, "participantid": code}, false)
 	if err != nil {
 		return nil, err
@@ -343,7 +427,7 @@ func (c *Client) UpdateEndpoint(ctx context.Context, endpointURL string, roles [
 
 func (c *Client) updateParticipant(ctx context.Context, fields map[string]any, roles []string) (json.RawMessage, error) {
 	body := map[string]any{
-		"participant_code": c.cfg.Participant.ParticipantID,
+		"participant_code": c.Code(),
 		"scheme_code":      "PMJAY",
 	}
 	for k, v := range fields {
@@ -352,7 +436,7 @@ func (c *Client) updateParticipant(ctx context.Context, fields map[string]any, r
 	if len(roles) > 0 {
 		body["roles"] = roles
 	}
-	endpoint := strings.TrimRight(c.cfg.URLs.Participant, "/") + "/participant/update"
+	endpoint := strings.TrimRight(c.cfg().URLs.Participant, "/") + "/participant/update"
 	status, raw, err := c.postWithToken(ctx, endpoint, body, false)
 	if err != nil {
 		return nil, err
@@ -361,7 +445,7 @@ func (c *Client) updateParticipant(ctx context.Context, fields map[string]any, r
 		return nil, &Error{Code: fmt.Sprintf("PARTICIPANT_UPDATE_HTTP_%d", status), Message: "participant registry refused the certificate update",
 			Retryable: status >= 500 || status == 429, Status: status, Body: clip(raw)}
 	}
-	c.ForgetCertificate(c.cfg.Participant.ParticipantID)
+	c.ForgetCertificate(c.Code())
 	if json.Valid(raw) {
 		return json.RawMessage(raw), nil
 	}
@@ -369,15 +453,26 @@ func (c *Client) updateParticipant(ctx context.Context, fields map[string]any, r
 	return out, nil
 }
 
-// OwnKey returns the public key of this participant's private key.
-func (c *Client) OwnKey() *rsa.PublicKey { return c.own }
+// OwnKey returns the public key this participant decrypts with.
+func (c *Client) OwnKey() *rsa.PublicKey {
+	if c.prof == nil {
+		return nil
+	}
+	return c.prof.PublicKey()
+}
 
 // ForgetCertificate drops one cached certificate.
 func (c *Client) ForgetCertificate(code string) {
-	c.certMu.Lock()
-	delete(c.certs, strings.ToLower(nhcx.NormalizeCode(code)))
-	c.certMu.Unlock()
+	c.pool.certMu.Lock()
+	delete(c.pool.certs, strings.ToLower(nhcx.NormalizeCode(code)))
+	c.pool.certMu.Unlock()
 }
+
+// Shorthands for the pool's shared pieces.
+func (c *Client) cfg() *config.Config      { return c.pool.cfg }
+func (c *Client) log() *slog.Logger        { return c.pool.log }
+func (c *Client) locals() *participant.Set { return c.pool.locals }
+func (c *Client) httpClient() *http.Client { return c.pool.http }
 
 // -------------------------------------------------------------- gateway ----
 
@@ -394,7 +489,7 @@ type GatewayResult struct {
 // refreshes the token once and retries; any other status is returned to the
 // caller as-is, with the body verbatim.
 func (c *Client) Dispatch(ctx context.Context, path, compact string) (*GatewayResult, error) {
-	target := nhcx.TargetURL(c.cfg.URLs.NHCX, path)
+	target := nhcx.TargetURL(c.cfg().URLs.NHCX, path)
 	body := map[string]string{"payload": compact}
 	if nhcx.IsResponsePath(path) {
 		body["type"] = "JWEPayload"
@@ -443,7 +538,7 @@ func (c *Client) postWithToken(ctx context.Context, endpoint string, body any, g
 		req.Header["bearer_auth"] = []string{"Bearer " + token}
 		req.Header.Set("Authorization", "Bearer "+token)
 
-		resp, err := c.http.Do(req)
+		resp, err := c.httpClient().Do(req)
 		if err != nil {
 			return 0, nil, &Error{Code: label + "_UNREACHABLE", Message: endpoint + " unreachable", Retryable: true, Err: err}
 		}
@@ -453,7 +548,7 @@ func (c *Client) postWithToken(ctx context.Context, endpoint string, body any, g
 			return 0, nil, &Error{Code: label + "_READ_ERROR", Message: "read response", Retryable: true, Err: readErr}
 		}
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
-			c.log.Warn("upstream answered 401, refreshing session token", "url", endpoint)
+			c.log().Warn("upstream answered 401, refreshing session token", "url", endpoint)
 			if _, err := c.RefreshToken(ctx); err != nil {
 				return 0, nil, err
 			}

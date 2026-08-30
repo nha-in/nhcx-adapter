@@ -31,6 +31,12 @@ certificate and registered endpoint before it listens, and — in a terminal —
 offers to fix whatever fails (generate/upload a certificate, re-register the
 endpoint, reopen the editor). Details in [Startup checks](#startup-checks).
 
+Release archives (see [Build & release](#build--release)) also carry four
+launcher scripts — `serve`, `serve-hidden`, `stop`, `update` (`.bat` on
+Windows, `.sh` elsewhere) — so a server can be started in the background,
+stopped, and moved to another version without remembering any flags. See
+[Running from an archive](#running-from-an-archive) and [Updating](#updating).
+
 ---
 
 ## How it works
@@ -84,9 +90,11 @@ the config. Unknown keys are rejected. Everything else has a default:
 | `publicUrl` | — | How NHCX reaches this gateway from outside; proposed as the registry `endpoint_url`. |
 | `apiKey` | — | Bearer key your system sends to `/out` and `/token`. **Required in production.** |
 | `participant.participantId` | — | Your registry code (`@hcx` added if missing). |
+| `participant.name` | — | A label for logs and the banner. Cosmetic. |
+| `participants[]` | `[]` | Additional identities this gateway holds; see [Hosting several participants](#hosting-several-participants). |
 | `participant.clientId` / `clientSecret` | — | ABDM credentials from onboarding. |
 | `participant.privateKey` | — | RSA key of your registered certificate: PEM, base64 PEM or `@file`. |
-| `callback.url` | — | Where decrypted messages are POSTed. |
+| `callback.url` | — | Where decrypted messages are POSTed. Per participant under `participants[].callback`. |
 | `callback.appendPath` | `true` | Append the NHCX path: `…/callback/v1/preauth/on_submit`. |
 | `callback.routes` | `{}` | Per-path overrides, used verbatim: `{"v1/claim/on_submit": "http://claims/hook"}`. |
 | `callback.timeoutSeconds` | `20` | Time your backend has to accept a delivery (NHCX wants its 202 within 30 s). |
@@ -116,9 +124,68 @@ Sandbox values are verified; production values follow NHA's documented host
 swap — confirm against your production onboarding letter and override under
 `urls` if they differ.
 
+### Hosting several participants
+
+One process can be more than one participant. The top-level `participant` is
+the default; each entry in `participants` is another identity, with its own
+registry code and its own callback:
+
+```json
+{
+  "participant": {
+    "participantId": "1000003463@hcx",
+    "clientId": "${NHCX_CLIENT_ID}",
+    "clientSecret": "${NHCX_CLIENT_SECRET}",
+    "privateKey": "@private_key.pem"
+  },
+  "participants": [
+    { "participantId": "1000004805@hcx", "name": "Dummy IRDAI Payer",
+      "callback": { "url": "http://127.0.0.1:8082/nhcx/callback" } },
+    { "participantId": "1000001518@hcx", "name": "PMJAY",
+      "callback": { "url": "http://127.0.0.1:8090/nhcx/callback" },
+      "clientId": "…", "clientSecret": "…", "privateKey": "@pmjay_key.pem" }
+  ],
+  "callback": { "url": "http://127.0.0.1:8765/nhcx/callback" }
+}
+```
+
+**What a hosted entry needs is just a code and a callback.** Everything else
+is inherited from the default profile — credentials, private key, and every
+callback field it does not set (`apiKey`, `timeoutSeconds`, `appendPath`,
+`routes`). The second entry above is the fully-specified form: its own ABDM
+credentials and its own certificate.
+
+`callbackUrl` is accepted as a synonym for `callback.url`, so an hcxkit
+`participants` array can be pasted across unchanged.
+
+What changes with more than one participant:
+
+| | |
+| --- | --- |
+| **Inbound** | The `x-hcx-recipient_code` in the JWE picks the participant. Its key decrypts (the others are tried as a fallback), its callback receives the delivery, and its `callback.apiKey` is the bearer token. A code no profile holds is refused with `WRONG_RECIPIENT`, which names every code this gateway does hold. |
+| **Outbound** | `x-hcx-sender_code` picks who sends: that participant's code goes in the protected header and its credentials mint the session token. Unset, it is the default profile — unchanged from a single-participant gateway. |
+| **Sessions** | One per distinct `clientId`. Profiles that inherit the default's credentials share its token rather than opening a second session for the same client. |
+| **Delivery envelope** | `meta.participant` names the addressee, and the callback also gets it as `X-Nhcx-Participant`. |
+| **`GET /token`** | `?participant=<code>` returns that identity's token. An unknown code is a 404 rather than a silent fallback. |
+| **`nhcx-gateway token`** | `--participant <code>` does the same on the command line. |
+| **Startup checks** | Each hosted participant gets its own line: its credentials must mint a session, and the registry certificate for its code must match the key it will decrypt with. |
+| **Ledger** | Unchanged — `sender` and `recipient` were already recorded, so `GET /ledger?participant=<code>` filters one identity's traffic. |
+
+Encrypting for a code this gateway itself holds is allowed (a loopback test,
+or one hosted participant writing to another); encrypting for an outside
+participant with one of our own certificates is still refused as
+`SELF_ENCRYPTION_KEY`.
+
+The interactive repair flow — generate a certificate, re-register an
+endpoint — acts on the default profile. A hosted participant whose
+certificate does not match is reported at startup and fixed by registering
+its certificate yourself.
+
 ### The editor
 
-`nhcx-gateway config edit` is a full-screen form over the same file:
+`nhcx-gateway config edit` is a full-screen form over the default profile and
+the shared sections. The `participants` array is edited by hand; the editor
+preserves it. Otherwise:
 **↑/↓** move · **Enter** edit · **←/→** cycle choices / toggle / step numbers ·
 **Backspace** reset to default · **Ctrl+S** save · **q** quit. It validates
 as you type (including that the private key file exists and parses), shows
@@ -309,6 +376,8 @@ nhcx-gateway token                                               print a fresh s
 nhcx-gateway decrypt  [--file jwe-or-callback.json]              decrypt a JWE with your key
 nhcx-gateway config init|edit [FILE]                             write the sample / open the editor
 nhcx-gateway ledger list|show|thread|stats [--json]              browse the traffic ledger
+nhcx-gateway update   [--list] [--check] [--latest] [--to TAG] [-y] [--prerelease]
+                                                                 list GitHub releases; upgrade or downgrade
 nhcx-gateway version
 ```
 
@@ -319,8 +388,89 @@ works means `serve` will. `cert generate` never overwrites without
 
 ---
 
+## Running from an archive
+
+Every release archive holds the binary, this README, `config.sample.json`
+and four scripts that wrap the binary for day-to-day use. They live next to
+the binary and `cd` there themselves, so they work from any directory or a
+double-click.
+
+| Windows | Linux / macOS / FreeBSD | Does |
+| --- | --- | --- |
+| `serve.bat` | `./serve.sh` | `nhcx-gateway serve` in this window; Ctrl+C stops it. Extra arguments pass through (`serve.bat --skip-checks`). |
+| `serve-hidden.bat` | `./serve-hidden.sh` | Starts `serve --no-tui` in the background with no window/terminal. Output goes to `logs/nhcx-gateway.log` (the previous run is kept as `logs/nhcx-gateway.prev.log`), the process id to `nhcx-gateway.pid`. Waits a few seconds and, if the startup checks failed, prints the tail of the log. Refuses to start a second instance. |
+| `stop.bat` | `./stop.sh` | Stops the background server: asks it to shut down (in-flight requests drain for up to 30 s), then forces it. Without a pid file it falls back to finding the process by name. |
+| `update.bat` | `./update.sh` | `nhcx-gateway update` with the same arguments, then reminds you to `stop` + `serve-hidden` if a server is running on the old version. |
+
+The Windows hidden start uses `powershell Start-Process -WindowStyle Hidden`,
+which is present on every supported Windows; nothing is installed as a
+service. For a service or boot-time start use Task Scheduler / NSSM
+(`serve-hidden.bat` as the action) or systemd on Linux — see below.
+
+---
+
+## Updating
+
+`nhcx-gateway update` looks at the GitHub releases of this project and
+installs whichever one you pick in place of the running binary — newer
+**or older**, so a bad release is a one-command rollback.
+
+```
+$ nhcx-gateway update
+fetching releases from github.com/nha-in/nhcx-adapter…
+installed v1.0.0 linux/amd64
+latest    v1.2.0 — update available
+
+  v1.2.0         2026-09-02 latest          ◀ pick one; older = downgrade
+  v1.1.0         2026-08-20
+  v1.0.0         2026-08-10 installed
+  v0.9.0         2026-08-01
+  cancel
+```
+
+In a terminal it is an arrow-key menu with a confirmation that shows the
+release notes; pick a version and it downloads the archive for this
+OS/architecture, checks it against the release's `SHA256SUMS`, swaps the
+binary (written beside the old one and renamed into place, so a failed
+download never leaves a broken install), and runs the new binary's
+`version` to prove it starts. **The running server keeps its version until
+restarted** — `stop` + `serve-hidden` (or your service manager) switches.
+
+| Flag | |
+| --- | --- |
+| `--list` | print every release with *latest* / *installed* / *pre-release* / *no build for this platform* marks, and exit |
+| `--check` | print installed vs latest; exit **1** when a newer release exists (for cron / monitoring) |
+| `--latest` | install the newest stable release; says *already up to date* otherwise |
+| `--to v1.1.0` | install that tag, whichever direction that is (`1.1.0` works too) |
+| `-y` / `--yes` | no confirmation |
+| `--prerelease` | include pre-releases (`v2.0.0-rc1`) in the list and as `--latest` |
+| `--repo owner/name` | consult another repository |
+
+Without a terminal (`serve-hidden`, cron, CI) only `--latest` / `--to` /
+`--list` / `--check` work; there is nothing to ask.
+
+`serve` also checks once at startup, in the background with a 15 s cap, and
+logs `update available installed=v1.0.0 latest=v1.2.0` if there is one — it
+never blocks or fails the start. Turn that off with `--no-update-check` or
+`NHCX_GATEWAY_NO_UPDATE_CHECK=1`.
+
+Environment: `NHCX_GATEWAY_UPDATE_REPO` (default `nha-in/nhcx-adapter`),
+`GITHUB_TOKEN` / `NHCX_GATEWAY_GITHUB_TOKEN` (needed for a **private**
+repository, otherwise only raises the API rate limit),
+`NHCX_GATEWAY_GITHUB_API` (GitHub Enterprise base URL). The binary has to be
+writable by the user running `update`; a `/usr/local/bin` install owned by
+root needs `sudo nhcx-gateway update`. On Windows the previous binary is
+parked as `nhcx-gateway.exe.old` while a server still runs it and deleted at
+the next start. Dev builds (`version` shows something other than a tag)
+list releases but never report *update available*, since there is nothing
+to compare.
+
+---
+
 ## Deploying
 
+- **Background on a plain box**: `serve-hidden` / `stop` from the archive
+  (above). Logs land in `logs/`.
 - **Reverse proxy**: put TLS on nginx/Caddy and forward `https://host/in` →
   `127.0.0.1:8090/in`; set `publicUrl` accordingly. `X-Forwarded-For` is
   not trusted; the peer address is what gets logged.
@@ -360,7 +510,14 @@ git tag v1.0.0 && git push origin v1.0.0
 
 produces release **nhcx-gateway v1.0.0** with one archive per platform, a
 `SHA256SUMS`, and auto-generated notes. The version inside the binary comes
-from `git describe`, so it matches the tag.
+from `git describe`, so it matches the tag. Each archive contains the
+binary, `README.md`, `config.sample.json` and the launcher scripts from
+`scripts/pkg/windows/*.bat` or `scripts/pkg/unix/*.sh`. `nhcx-gateway
+update` relies on exactly this layout — the archive name
+`nhcx-gateway_<tag>_<os>_<arch>.tar.gz|.zip` and the `SHA256SUMS` — so keep
+it if you fork the release process, and point `NHCX_GATEWAY_UPDATE_REPO`
+(or `-X nhcx-gateway/internal/update.DefaultRepo=…` at build time) at your
+repository.
 
 ---
 

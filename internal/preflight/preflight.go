@@ -124,7 +124,55 @@ func Run(ctx context.Context, gw *gateway.Gateway) *Report {
 			r.add("encryption certificate", false, explain(err))
 		}
 	}
+	checkHosted(ctx, gw, r)
 	return r
+}
+
+// checkHosted verifies the additional identities in "participants". Each one
+// needs a session its credentials can mint and a registry certificate its key
+// opens, exactly as the default does — a hosted participant whose certificate
+// does not match cannot decrypt anything addressed to it, and the failure
+// would otherwise only show up on the first live message.
+//
+// These are reported but not repaired: the interactive fix flow (generate a
+// certificate, re-register an endpoint) acts on the default profile, and
+// pointing it at a hosted one would need a participant to be chosen first.
+func checkHosted(ctx context.Context, gw *gateway.Gateway, r *Report) {
+	profiles := gw.Profiles()
+	if !profiles.Hosted() {
+		return
+	}
+	for _, prof := range profiles.All() {
+		if prof.Default {
+			continue
+		}
+		code := prof.Code()
+		name := "participant " + code
+		client := gw.ABDMFor(code)
+
+		if _, err := client.Token(ctx); err != nil {
+			r.add(name, false, explain(err)+" — check its clientId / clientSecret")
+			continue
+		}
+		_, pem, err := client.FetchCertificate(ctx, code)
+		if err != nil {
+			if abdm.AsError(err).Code == "CERT_NOT_FOUND" {
+				r.add(name, false, "registry has no encryption certificate for "+code)
+			} else {
+				r.add(name, false, explain(err))
+			}
+			continue
+		}
+		pub, perr := keys.ParsePublicKey(pem)
+		switch {
+		case perr != nil:
+			r.add(name, false, "registry certificate is unreadable: "+perr.Error())
+		case prof.PublicKey() != nil && prof.PublicKey().Equal(pub):
+			r.add(name, true, "certificate matches · callback "+gw.DeliveryURL("", code))
+		default:
+			r.add(name, false, "registry certificate does NOT match this participant's key — inbound messages for "+code+" could not be decrypted")
+		}
+	}
 }
 
 // TestEndpoint checks that the endpoint_url registered for the participant

@@ -19,7 +19,19 @@ var (
 	dim   = r.NewStyle().Faint(true)
 	brand = r.NewStyle().Foreground(lipgloss.Color("6")).Bold(true)
 	key   = r.NewStyle().Foreground(lipgloss.Color("6"))
+	// Direction of travel. Distinct from the status colours (red/green/
+	// yellow) and from the cyan of paths and participant codes, so a
+	// screenful can be skimmed for "what did we send" against "what arrived"
+	// without reading a word.
+	out = r.NewStyle().Foreground(lipgloss.Color("5")).Bold(true)
+	in  = r.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)
 )
+
+// Out renders a message leaving this gateway (magenta).
+func Out(s string) string { return out.Render(s) }
+
+// In renders a message arriving at it (blue).
+func In(s string) string { return in.Render(s) }
 
 // Good renders success text (green).
 func Good(s string) string { return good.Render(s) }

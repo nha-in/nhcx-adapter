@@ -10,6 +10,7 @@
 //	nhcx-gateway decrypt [--config config.json] [--file jwe.txt]
 //	nhcx-gateway config init [path]
 //	nhcx-gateway config edit [path]
+//	nhcx-gateway update  [--list | --check | --latest | --to TAG] [-y]
 //	nhcx-gateway version
 package main
 
@@ -26,6 +27,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +48,7 @@ import (
 	"nhcx-gateway/internal/server"
 	"nhcx-gateway/internal/style"
 	"nhcx-gateway/internal/tui"
+	"nhcx-gateway/internal/update"
 )
 
 //go:embed config.sample.json
@@ -61,7 +64,7 @@ var (
 const usage = `nhcx-gateway — stateless NHCX adapter (sandbox and production)
 
 Usage:
-  nhcx-gateway serve    [--config FILE] [--no-tui] [--skip-checks] [--no-banner]
+  nhcx-gateway serve    [--config FILE] [--no-tui] [--skip-checks] [--no-banner] [--no-update-check]
                                                                  run the HTTP adapter (checks the setup first)
   nhcx-gateway check    [--config FILE] [--no-tui] [--endpoint URL] run the setup checks, offer fixes, and exit
   nhcx-gateway send     [--config FILE] --path P --recipient C   send one bundle (from --file or stdin)
@@ -77,6 +80,8 @@ Usage:
   nhcx-gateway ledger show   ID [--json]                        one message in full, bundle included
   nhcx-gateway ledger thread CORRELATION_ID [--json]            an exchange and where it stands
   nhcx-gateway ledger stats  [--json]
+  nhcx-gateway update   [--list] [--check] [--latest] [--to TAG] [-y] [--prerelease]
+                                                                 list the GitHub releases; upgrade or downgrade this binary
   nhcx-gateway version
 
 The config path defaults to $NHCX_GATEWAY_CONFIG, then ./config.json.
@@ -87,6 +92,7 @@ func main() {
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)
 	}
+	update.CleanupOld() // a Windows update leaves the previous binary as .old
 	var err error
 	switch os.Args[1] {
 	case "serve":
@@ -105,6 +111,8 @@ func main() {
 		err = cmdConfig(os.Args[2:])
 	case "ledger":
 		err = cmdLedger(os.Args[2:])
+	case "update":
+		err = cmdUpdate(os.Args[2:])
 	case "version", "--version", "-v":
 		fmt.Printf("%s %s (%s) built %s\n", style.Brand("nhcx-gateway"), version, commit, builtAt)
 	case "help", "--help", "-h":
@@ -229,6 +237,7 @@ func cmdServe(args []string) error {
 	noTUI := fs.Bool("no-tui", false, "never open the configurator or prompts; fail or warn instead")
 	skip := fs.Bool("skip-checks", false, "start without the session / registry / certificate / endpoint checks")
 	noBanner := fs.Bool("no-banner", os.Getenv("NHCX_GATEWAY_NO_BANNER") != "", "do not print the startup banner (also NHCX_GATEWAY_NO_BANNER=1)")
+	noUpdate := fs.Bool("no-update-check", os.Getenv("NHCX_GATEWAY_NO_UPDATE_CHECK") != "", "do not look for a newer release on GitHub at startup (also NHCX_GATEWAY_NO_UPDATE_CHECK=1)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -243,13 +252,25 @@ func cmdServe(args []string) error {
 	if !*noBanner {
 		fmt.Fprint(os.Stderr, banner.Serve(version, cfg.Env, cfg.Participant.ParticipantID, cfg.Listen))
 	}
-	logger.Info("nhcx-gateway starting", "version", version, "callback", gw.DeliveryURL(""), "nhcx", cfg.URLs.NHCX)
+	logger.Info("nhcx-gateway starting", "version", version, "callback", gw.DeliveryURL("", ""), "nhcx", cfg.URLs.NHCX,
+		"participants", gw.Profiles().Len())
+	// With more than one identity, say which callback each one's traffic goes
+	// to — the single "callback" field above is only the default's.
+	if gw.Profiles().Hosted() {
+		for _, prof := range gw.Profiles().All() {
+			logger.Info("hosting participant", "participant", prof.Code(), "name", prof.Label(),
+				"callback", gw.DeliveryURL("", prof.Code()), "default", prof.Default)
+		}
+	}
 	srv := server.New(gw, logger, version)
 
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Run(serveCtx) }()
+	if !*noUpdate {
+		notifyUpdate(serveCtx, logger)
+	}
 
 	// The registered endpoint can only be tested once we are listening; the
 	// server keeps serving underneath while the operator decides what to do.
@@ -900,6 +921,7 @@ func generateCertificateFiles(cfg *config.Config, days int, force bool) (*genera
 
 func cmdToken(args []string) error {
 	fs, cfgPath := newFlags("token")
+	as := fs.String("participant", "", "mint the token for this hosted participant (default: the default profile)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -907,9 +929,16 @@ func cmdToken(args []string) error {
 	if err != nil {
 		return err
 	}
+	client := gw.ABDM()
+	if *as != "" {
+		if gw.Profiles().ByCode(*as) == nil {
+			return fmt.Errorf("no participant %s is configured; this gateway holds %s", *as, strings.Join(gw.Profiles().Codes(), ", "))
+		}
+		client = gw.ABDMFor(*as)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	tok, err := gw.ABDM().RefreshToken(ctx)
+	tok, err := client.RefreshToken(ctx)
 	if err != nil {
 		return err
 	}
@@ -1012,11 +1041,12 @@ func openLedger(cfgPath string) (*config.Config, *ledger.Store, error) {
 
 func cmdLedger(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: nhcx-gateway ledger list|show|thread|stats …")
+		return errors.New("usage: nhcx-gateway ledger list|show|thread|stats|clear …")
 	}
 	sub, rest := args[0], args[1:]
 	fs, cfgPath := newFlags("ledger " + sub)
 	asJSON := fs.Bool("json", false, "machine-readable output")
+	assumeYes := fs.Bool("yes", false, "clear: do not ask for confirmation")
 	var (
 		direction   = fs.String("direction", "", "out or in")
 		entity      = fs.String("entity", "", "preauth, claim, coverageeligibility, communication, payment, insuranceplan, task, status, error")
@@ -1032,7 +1062,7 @@ func cmdLedger(args []string) error {
 	)
 	// The positional argument (id / correlation id) may sit before or after
 	// the flags; the flag package stops at the first non-flag, so split by hand.
-	boolFlags := map[string]bool{"json": true}
+	boolFlags := map[string]bool{"json": true, "yes": true, "y": true}
 	var positional, flagArgs []string
 	for i := 0; i < len(rest); i++ {
 		a := rest[i]
@@ -1056,6 +1086,40 @@ func cmdLedger(args []string) error {
 		return err
 	}
 	switch sub {
+	case "clear":
+		// Destructive and not undoable, so it says what it is about to do and
+		// waits — unless --yes, or there is nobody to ask.
+		stats := store.Stats()
+		if stats.Total == 0 {
+			fmt.Fprintln(os.Stderr, style.Dim("the ledger is already empty"))
+			return nil
+		}
+		if !*assumeYes {
+			if !isTerminal() {
+				return errors.New("refusing to clear the ledger without confirmation: pass --yes")
+			}
+			fmt.Fprintf(os.Stderr, "This deletes %s from %s.\n",
+				style.Title(fmt.Sprintf("%d message(s)", stats.Total)), style.Key(stats.Dir))
+			fmt.Fprint(os.Stderr, "There is no undo. Continue? [y/N] ")
+			var answer string
+			_, _ = fmt.Fscanln(os.Stdin, &answer)
+			switch strings.ToLower(strings.TrimSpace(answer)) {
+			case "y", "yes":
+			default:
+				fmt.Fprintln(os.Stderr, style.Dim("nothing was deleted"))
+				return nil
+			}
+		}
+		removed, err := store.Clear()
+		if err != nil {
+			return err
+		}
+		if *asJSON {
+			return printJSON(map[string]any{"cleared": removed, "dir": stats.Dir})
+		}
+		fmt.Fprintf(os.Stderr, "%s cleared %d message(s) from %s\n",
+			style.Good("✓"), removed, style.Key(stats.Dir))
+		return nil
 	case "list":
 		q := ledger.Query{Direction: *direction, Entity: *entity, Kind: *kind, Status: *status, CorrelationID: *corr,
 			WorkflowID: *workflow, Participant: *participant, Before: *before, Limit: *limit}
@@ -1233,4 +1297,302 @@ func printLedgerEntry(e *ledger.Entry) {
 			fmt.Println(string(e.FHIR))
 		}
 	}
+}
+
+// cmdUpdate lists the releases on GitHub and installs the one picked —
+// newer or older — in place of the running binary.
+//
+//	nhcx-gateway update                 interactive: pick a version
+//	nhcx-gateway update --list          print every release and stop
+//	nhcx-gateway update --check         say whether a newer release exists (exit 1 if so)
+//	nhcx-gateway update --latest [-y]   install the newest stable release
+//	nhcx-gateway update --to v1.2.0 [-y] install a specific tag (upgrade or downgrade)
+func cmdUpdate(args []string) error {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	list := fs.Bool("list", false, "list the available releases and exit")
+	check := fs.Bool("check", false, "report whether a newer release exists; exit 1 when it does")
+	latest := fs.Bool("latest", false, "install the newest stable release without asking")
+	to := fs.String("to", "", "install this tag (e.g. v1.2.0); older tags downgrade")
+	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	fs.BoolVar(yes, "y", false, "same as --yes")
+	pre := fs.Bool("prerelease", false, "include pre-releases")
+	repo := fs.String("repo", "", "GitHub repository to consult, owner/name (default "+update.DefaultRepo+", or $NHCX_GATEWAY_UPDATE_REPO)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	c := update.NewClient(*repo)
+	fmt.Fprintf(os.Stderr, "%s %s…\n", style.Dim("fetching releases from"), style.Key("github.com/"+c.Repo))
+	rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	releases, err := c.Releases(rctx)
+	cancel()
+	if err != nil {
+		return err
+	}
+	if !*pre {
+		releases = stableOnly(releases)
+	}
+	if len(releases) == 0 {
+		return fmt.Errorf("no releases found in %s", c.Repo)
+	}
+	ch := update.CompareCurrent(version, releases)
+	if *pre && ch.Known {
+		// The newest pre-release counts as "latest" when asked for.
+		ch.Latest = update.Latest(releases, true)
+		ch.Available = ch.Latest != nil && update.Compare(ch.Latest.Version, ch.Current) > 0
+	}
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	printUpdateStatus(ch, platform)
+
+	switch {
+	case *check:
+		if ch.Available {
+			os.Exit(1)
+		}
+		return nil
+	case *list:
+		printReleaseList(releases, ch, len(releases))
+		return nil
+	}
+
+	var target *update.Release
+	switch {
+	case *to != "":
+		if target = update.Find(releases, *to); target == nil {
+			return fmt.Errorf("no release %s (see `nhcx-gateway update --list`)", *to)
+		}
+	case *latest:
+		if target = update.Latest(releases, *pre); target == nil {
+			return errors.New("no stable release available")
+		}
+		if ch.Known && !*yes && update.Compare(target.Version, ch.Current) <= 0 {
+			fmt.Fprintln(os.Stderr, style.Good("already up to date"))
+			return nil
+		}
+	case isTerminal():
+		target, err = pickRelease(releases, ch, platform)
+		if err != nil {
+			return err
+		}
+		if target == nil {
+			return nil
+		}
+	default:
+		printReleaseList(releases, ch, len(releases))
+		return errors.New("no terminal: pass --latest or --to TAG")
+	}
+
+	asset := target.AssetFor(runtime.GOOS, runtime.GOARCH)
+	if asset == nil {
+		return fmt.Errorf("release %s has no build for %s", target.Tag, platform)
+	}
+	exe, err := update.Executable()
+	if err != nil {
+		return err
+	}
+	direction := "install"
+	if ch.Known {
+		switch update.Compare(target.Version, ch.Current) {
+		case 1:
+			direction = "upgrade to"
+		case -1:
+			direction = "downgrade to"
+		case 0:
+			direction = "reinstall"
+		}
+	}
+	if !*yes && !confirmInstall(target, direction, exe) {
+		fmt.Fprintln(os.Stderr, style.Dim("cancelled"))
+		return nil
+	}
+
+	fmt.Fprintf(os.Stderr, "%s %s %s\n", style.Title(direction), style.Key(target.Tag), style.Dim("("+asset.Name+")"))
+	archive, err := c.Download(ctx, target, asset, func(done, total int64) {
+		if total > 0 {
+			fmt.Fprintf(os.Stderr, "\r  downloading  %5.1f / %.1f MB", float64(done)/1e6, float64(total)/1e6)
+		} else {
+			fmt.Fprintf(os.Stderr, "\r  downloading  %5.1f MB", float64(done)/1e6)
+		}
+	})
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return err
+	}
+	if target.Checksums() != nil {
+		fmt.Fprintln(os.Stderr, "  "+style.Good("✓")+" checksum verified")
+	} else {
+		fmt.Fprintln(os.Stderr, "  "+style.Warn("!")+" release has no SHA256SUMS; checksum not verified")
+	}
+	bin, err := update.Extract(asset.Name, archive)
+	if err != nil {
+		return err
+	}
+	if err := update.Install(exe, bin); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "  %s installed %s\n", style.Good("✓"), style.Key(exe))
+	if line, err := update.InstalledVersion(ctx, exe); err != nil {
+		fmt.Fprintf(os.Stderr, "  %s the new binary did not start: %v\n", style.Bad("✗"), err)
+		return errors.New("installed binary failed its version check")
+	} else {
+		fmt.Fprintf(os.Stderr, "  %s %s\n", style.Good("✓"), line)
+	}
+	fmt.Fprintln(os.Stderr, style.Dim("restart `nhcx-gateway serve` to run the new version"))
+	return nil
+}
+
+func stableOnly(releases []update.Release) []update.Release {
+	out := releases[:0:0]
+	for _, r := range releases {
+		if !r.Prerelease && r.Version.Pre == "" {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func printUpdateStatus(ch update.Check, platform string) {
+	cur := version
+	if !ch.Known {
+		cur += " (not a release build)"
+	}
+	fmt.Fprintf(os.Stderr, "%s %s %s\n", style.Title("installed"), style.Key(cur), style.Dim(platform))
+	if ch.Latest == nil {
+		return
+	}
+	switch {
+	case ch.Available:
+		fmt.Fprintf(os.Stderr, "%s %s %s\n", style.Title("latest   "), style.Key(ch.Latest.Tag), style.Warn("— update available"))
+	case ch.Known && update.Compare(ch.Current, ch.Latest.Version) == 0:
+		fmt.Fprintf(os.Stderr, "%s %s %s\n", style.Title("latest   "), style.Key(ch.Latest.Tag), style.Good("— up to date"))
+	default:
+		fmt.Fprintf(os.Stderr, "%s %s\n", style.Title("latest   "), style.Key(ch.Latest.Tag))
+	}
+}
+
+// releaseLine formats one release for a list or menu.
+func releaseLine(r *update.Release, ch update.Check, platform string) string {
+	tags := []string{}
+	if ch.Latest != nil && r.Tag == ch.Latest.Tag {
+		tags = append(tags, "latest")
+	}
+	if ch.Known && update.Compare(r.Version, ch.Current) == 0 && r.Version.Pre == ch.Current.Pre {
+		tags = append(tags, "installed")
+	}
+	if r.Prerelease || r.Version.Pre != "" {
+		tags = append(tags, "pre-release")
+	}
+	if r.AssetFor(runtime.GOOS, runtime.GOARCH) == nil {
+		tags = append(tags, "no build for "+platform)
+	}
+	date := ""
+	if !r.Published.IsZero() {
+		date = r.Published.Local().Format("2006-01-02")
+	}
+	return fmt.Sprintf("%-14s %-10s %s", r.Tag, date, strings.Join(tags, " · "))
+}
+
+func printReleaseList(releases []update.Release, ch update.Check, n int) {
+	platform := runtime.GOOS + "/" + runtime.GOARCH
+	fmt.Fprintln(os.Stderr)
+	for i, r := range releases {
+		if i >= n {
+			fmt.Fprintf(os.Stderr, "  %s\n", style.Dim(fmt.Sprintf("… %d more (--list shows all; --to TAG installs any)", len(releases)-n)))
+			break
+		}
+		line := releaseLine(&r, ch, platform)
+		if ch.Known && update.Compare(r.Version, ch.Current) == 0 {
+			line = style.Key(line)
+		}
+		fmt.Fprintf(os.Stderr, "  %s\n", line)
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+// pickRelease shows the menu and returns the chosen release, or nil when
+// the operator backs out.
+func pickRelease(releases []update.Release, ch update.Check, platform string) (*update.Release, error) {
+	const maxShown = 15
+	body := []string{"Installed: " + version + " (" + platform + ")"}
+	if ch.Latest != nil {
+		if ch.Available {
+			body = append(body, "Latest: "+ch.Latest.Tag+" — update available")
+		} else {
+			body = append(body, "Latest: "+ch.Latest.Tag)
+		}
+	}
+	body = append(body, "", "Pick the version to install. Older versions are downgraded to; the running server keeps its version until restarted.")
+	if len(releases) > maxShown {
+		body = append(body, fmt.Sprintf("Showing the newest %d of %d; `update --to TAG` installs any.", maxShown, len(releases)))
+	}
+	var opts []tui.Option
+	for i := range releases {
+		if i >= maxShown {
+			break
+		}
+		opts = append(opts, tui.Option{Key: releases[i].Tag, Label: releaseLine(&releases[i], ch, platform)})
+	}
+	opts = append(opts, tui.Option{Key: "", Label: "cancel"})
+	key, err := tui.Choose("nhcx-gateway update", body, opts)
+	if err != nil {
+		if errors.Is(err, tui.ErrCancelled) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if key == "" {
+		return nil, nil
+	}
+	return update.Find(releases, key), nil
+}
+
+// confirmInstall asks once more, showing the release notes.
+func confirmInstall(r *update.Release, direction, exe string) bool {
+	body := []string{fmt.Sprintf("%s %s and replace %s", strings.ToUpper(direction[:1])+direction[1:], r.Tag, exe)}
+	if !r.Published.IsZero() {
+		body = append(body, "Published "+r.Published.Local().Format("2006-01-02 15:04"))
+	}
+	if notes := strings.TrimSpace(r.Notes); notes != "" {
+		lines := strings.Split(notes, "\n")
+		if len(lines) > 12 {
+			lines = append(lines[:12], "…")
+		}
+		body = append(body, "")
+		body = append(body, lines...)
+	}
+	if !isTerminal() {
+		return true
+	}
+	key, err := tui.Choose("nhcx-gateway update", body, []tui.Option{
+		{Key: "install", Label: direction + " " + r.Tag},
+		{Key: "cancel", Label: "cancel"},
+	})
+	return err == nil && key == "install"
+}
+
+// notifyUpdate logs one line when a newer release exists. It never blocks
+// the server: it runs in the background and gives up quietly on any error.
+func notifyUpdate(ctx context.Context, logger *slog.Logger) {
+	if os.Getenv("NHCX_GATEWAY_NO_UPDATE_CHECK") != "" {
+		return
+	}
+	if _, ok := update.Parse(version); !ok {
+		return // dev build: nothing to compare against
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		c := update.NewClient("")
+		releases, err := c.Releases(ctx)
+		if err != nil {
+			logger.Debug("update check skipped", "error", err)
+			return
+		}
+		if ch := update.CompareCurrent(version, releases); ch.Available {
+			logger.Warn("update available", "installed", version, "latest", ch.Latest.Tag, "run", "nhcx-gateway update")
+		}
+	}()
 }

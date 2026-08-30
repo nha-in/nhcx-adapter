@@ -58,6 +58,13 @@ for target in "${TARGET_LIST[@]}"; do
     continue
   fi
   cp README.md config.sample.json "$stage/"
+  # Launcher scripts: serve / serve-hidden / stop / update for the platform.
+  if [ "$goos" = "windows" ]; then
+    cp scripts/pkg/windows/*.bat "$stage/"
+  else
+    cp scripts/pkg/unix/*.sh "$stage/"
+    chmod +x "$stage"/*.sh
+  fi
   (
     cd "$DIST"
     base="$(basename "$stage")"

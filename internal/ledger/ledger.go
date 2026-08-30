@@ -11,8 +11,6 @@ package ledger
 
 import (
 	"bufio"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -155,6 +153,8 @@ type Store struct {
 	ids     []string            // ascending
 	byCorr  map[string][]string // correlation id → ids (ascending)
 	seen    map[string]bool     // direction + api_call_id
+	idDay   string              // day code the counter belongs to
+	idSeq   uint64              // last sequence issued on that day
 }
 
 // ErrNotFound is returned by Get for an unknown id.
@@ -226,12 +226,82 @@ func (s *Store) add(sm *Summary) {
 	}
 }
 
-// NewID returns a time-ordered unique id: UTC timestamp to the microsecond
-// plus random bits.
-func NewID(t time.Time) string {
-	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return t.UTC().Format("20060102T150405.000000Z") + "-" + hex.EncodeToString(b)
+// Ledger ids are eight characters: four for the UTC date as YYMMDD, four for
+// a counter that restarts each day — 7UMV0001 is the first message of
+// 2026-08-31. Short enough to read out, compare by eye and paste into a
+// filter, where the old 32-character timestamp-plus-random ids were not.
+//
+// The alphabet is base32 over 0-9A-V, chosen because its ASCII order matches
+// its numeric order: a fixed-width id therefore sorts chronologically as a
+// plain string, which is what the ledger's "everything after X" queries and
+// the ascending ids slice rely on. RFC 4648's A-Z2-7 alphabet does not have
+// that property — '2' sorts before 'A' — and would have broken the ordering
+// silently.
+const (
+	idAlphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUV"
+	idDayWidth = 4 // YYMMDD needs 18 bits; 3 chars hold only 15
+	idSeqWidth = 4 // 32^4 = 1,048,576 messages in one day
+	idWidth    = idDayWidth + idSeqWidth
+)
+
+// encodeID renders v in base32, left-padded to width.
+func encodeID(v uint64, width int) string {
+	b := make([]byte, width)
+	for i := width - 1; i >= 0; i-- {
+		b[i] = idAlphabet[v&31]
+		v >>= 5
+	}
+	return string(b)
+}
+
+// decodeID reads a fixed-width base32 field back. Anything outside the
+// alphabet makes it zero, so a stray file name cannot poison the counter.
+func decodeID(s string) uint64 {
+	var v uint64
+	for i := 0; i < len(s); i++ {
+		j := strings.IndexByte(idAlphabet, s[i])
+		if j < 0 {
+			return 0
+		}
+		v = v<<5 | uint64(j)
+	}
+	return v
+}
+
+// dayCode is the UTC date as YYMMDD, encoded. It rises with the calendar, so
+// ids stay ordered across a date boundary.
+func dayCode(t time.Time) string {
+	u := t.UTC()
+	return encodeID(uint64(u.Year()%100*10000+int(u.Month())*100+u.Day()), idDayWidth)
+}
+
+// nextID issues the next id for t. The caller holds s.mu.
+//
+// On the first message of a day — including the first after a restart — the
+// counter picks up from the highest id already on record for that date, so a
+// restart cannot hand out an id that is already a file on disk.
+func (s *Store) nextID(t time.Time) string {
+	day := dayCode(t)
+	if day != s.idDay {
+		s.idDay, s.idSeq = day, s.highestSeq(day)
+	}
+	s.idSeq++
+	return day + encodeID(s.idSeq, idSeqWidth)
+}
+
+// highestSeq is the largest counter already issued on that day. Ids from
+// before this scheme are a different length and are ignored.
+func (s *Store) highestSeq(day string) uint64 {
+	var high uint64
+	for _, id := range s.ids {
+		if len(id) != idWidth || id[:idDayWidth] != day {
+			continue
+		}
+		if v := decodeID(id[idDayWidth:]); v > high {
+			high = v
+		}
+	}
+	return high
 }
 
 // Record stores an entry. Missing id, timestamp, entity/action/kind and
@@ -241,7 +311,9 @@ func (s *Store) Record(e *Entry) error {
 		e.CreatedAt = time.Now()
 	}
 	if e.ID == "" {
-		e.ID = NewID(e.CreatedAt)
+		s.mu.Lock()
+		e.ID = s.nextID(e.CreatedAt)
+		s.mu.Unlock()
 	}
 	e.Path = nhcx.CleanPath(e.Path)
 	if e.Entity == "" {
@@ -310,7 +382,10 @@ func (s *Store) Get(id string) (*Entry, error) {
 	if !validID(id) {
 		return nil, ErrNotFound
 	}
-	day := id[:4] + "-" + id[4:6] + "-" + id[6:8]
+	day, ok := idDay(id)
+	if !ok {
+		return nil, ErrNotFound
+	}
 	raw, err := os.ReadFile(filepath.Join(s.dir, day, id+".json"))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -326,15 +401,43 @@ func (s *Store) Get(id string) (*Entry, error) {
 }
 
 func validID(id string) bool {
-	if len(id) < 24 || strings.ContainsAny(id, "/\\") {
-		return false
+	_, ok := idDay(id)
+	return ok
+}
+
+// idDay is the day folder an id lives in, as "2006-01-02".
+//
+// Two schemes are read. Current ids are eight base32 characters whose first
+// four are the date; ids written before that are a UTC timestamp beginning
+// YYYYMMDD. A ledger written by an older build stays readable — the records
+// are the point of keeping one, and rewriting history to suit a new id format
+// would be a strange thing to do to an audit trail.
+func idDay(id string) (string, bool) {
+	if strings.ContainsAny(id, "/\\") {
+		return "", false
 	}
-	for _, c := range id[:8] {
-		if c < '0' || c > '9' {
-			return false
+	if len(id) == idWidth {
+		for i := 0; i < idWidth; i++ {
+			if strings.IndexByte(idAlphabet, id[i]) < 0 {
+				return "", false
+			}
 		}
+		v := decodeID(id[:idDayWidth])
+		yy, mm, dd := v/10000, v/100%100, v%100
+		if mm < 1 || mm > 12 || dd < 1 || dd > 31 {
+			return "", false
+		}
+		return fmt.Sprintf("20%02d-%02d-%02d", yy, mm, dd), true
 	}
-	return true
+	if len(id) >= 24 {
+		for _, c := range id[:8] {
+			if c < '0' || c > '9' {
+				return "", false
+			}
+		}
+		return id[:4] + "-" + id[4:6] + "-" + id[6:8], true
+	}
+	return "", false
 }
 
 // Query filters a listing. Zero values mean "any".
@@ -552,6 +655,67 @@ func (s *Store) Stats() Stats {
 
 // Sweep deletes day directories older than the retention period and drops
 // their entries from the index. Returns how many entries went.
+// Clear removes every recorded message and empties the in-memory index. It
+// returns how many messages went.
+//
+// Only day folders are touched — directories named like 2026-08-31, holding
+// the records this store wrote. A ledger directory that has been pointed at
+// something else by a mistaken config is not this function's to empty, and
+// "clear the ledger" should never become "delete whatever is in that path".
+func (s *Store) Clear() (int, error) {
+	days, err := os.ReadDir(s.dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("ledger: %w", err)
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	removed := 0
+	var failed error
+	for _, d := range days {
+		if !d.IsDir() || !isDayFolder(d.Name()) {
+			continue
+		}
+		for _, id := range s.ids {
+			if day, ok := idDay(id); ok && day == d.Name() {
+				removed++
+			}
+		}
+		if err := os.RemoveAll(filepath.Join(s.dir, d.Name())); err != nil && failed == nil {
+			failed = fmt.Errorf("ledger: %w", err)
+		}
+	}
+
+	s.entries = map[string]*Summary{}
+	s.ids = nil
+	s.byCorr = map[string][]string{}
+	s.seen = map[string]bool{}
+	// The counter is derived from what is on record, and there is nothing on
+	// record now, so the next message starts the day again at 0001.
+	s.idDay, s.idSeq = "", 0
+	return removed, failed
+}
+
+// isDayFolder reports whether name looks like a YYYY-MM-DD ledger folder.
+func isDayFolder(name string) bool {
+	if len(name) != 10 || name[4] != '-' || name[7] != '-' {
+		return false
+	}
+	for i, c := range name {
+		if i == 4 || i == 7 {
+			continue
+		}
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Store) Sweep(now time.Time) int {
 	if s.retention == 0 {
 		return 0
@@ -571,10 +735,9 @@ func (s *Store) Sweep(now time.Time) int {
 		if err := os.RemoveAll(filepath.Join(s.dir, d.Name())); err != nil {
 			continue
 		}
-		prefix := strings.ReplaceAll(d.Name(), "-", "")
 		kept := s.ids[:0]
 		for _, id := range s.ids {
-			if strings.HasPrefix(id, prefix) {
+			if day, ok := idDay(id); ok && day == d.Name() {
 				sm := s.entries[id]
 				delete(s.entries, id)
 				if sm != nil {

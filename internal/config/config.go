@@ -60,16 +60,36 @@ func EnvironmentDefaults(env Environment) (URLs, string) {
 	}
 }
 
-// Participant is this gateway's own identity on the exchange.
+// Participant is one identity this gateway holds on the exchange.
+//
+// The top-level "participant" is the default profile. Additional profiles in
+// "participants" are hosted alongside it: each has its own registry code and
+// its own callback, so one gateway can serve a provider and a payer at once
+// and deliver each one's traffic to its own backend. Anything a hosted
+// profile leaves unset is inherited from the default — credentials, key and
+// callback — which is what makes a profile that is only
+// {participantId, name, callback} work.
 type Participant struct {
 	// ParticipantID is the registry code, with or without the "@hcx" suffix.
 	ParticipantID string `json:"participantId"`
+	// Name is a label for logs and the startup banner. Cosmetic.
+	Name string `json:"name,omitempty"`
 	// ClientID / ClientSecret are the ABDM credentials issued at onboarding.
-	ClientID     string `json:"clientId"`
-	ClientSecret string `json:"clientSecret"`
+	// Blank on a hosted profile means "use the default profile's".
+	ClientID     string `json:"clientId,omitempty"`
+	ClientSecret string `json:"clientSecret,omitempty"`
 	// PrivateKey is the RSA key matching the encryption certificate registered
-	// for this participant: PEM, base64-encoded PEM, or "@file".
-	PrivateKey string `json:"privateKey"`
+	// for this participant: PEM, base64-encoded PEM, or "@file". Blank on a
+	// hosted profile means the profile shares the default's certificate —
+	// the usual arrangement, since one registered key can front several codes.
+	PrivateKey string `json:"privateKey,omitempty"`
+	// Callback overrides the top-level callback for messages addressed to
+	// this participant. Unset fields fall back to it, so a profile normally
+	// only names a URL.
+	Callback *Callback `json:"callback,omitempty"`
+	// CallbackURL is hcxkit's spelling of the same thing, accepted so a kit
+	// config can be carried over unchanged. Callback wins when both are set.
+	CallbackURL string `json:"callbackUrl,omitempty"`
 }
 
 // Callback is where decrypted inbound messages are delivered.
@@ -112,6 +132,10 @@ type Auth struct {
 // Certs controls the recipient certificate cache.
 type Certs struct {
 	CacheHours int `json:"cacheHours"`
+	// RefuseSelfKey decides what happens when the registry hands back one of
+	// this gateway's own certificates for another participant. Unset means
+	// "in production, refuse; in sandbox, allow" — see RefusesSelfKey.
+	RefuseSelfKey *bool `json:"refuseSelfKey,omitempty"`
 }
 
 // Ledger records every message that crosses the gateway (see package ledger).
@@ -146,8 +170,12 @@ type Config struct {
 	// https://hcx.example.com/in — what belongs in the registry's
 	// endpoint_url. Optional; used to propose and verify the registration.
 	PublicURL string `json:"publicUrl"`
-	// APIKey, when set, must be presented as "Authorization: Bearer" on /out.
+	// APIKey is presented as "Authorization: Bearer" on /out and the kit
+	// compatibility routes. Whether it is *demanded* is RequireAPIKey.
 	APIKey string `json:"apiKey"`
+	// RequireAPIKey forces the key to be checked, or forces it not to be.
+	// Unset means "in production, yes; in sandbox, no" — see APIKeyRequired.
+	RequireAPIKey *bool `json:"requireApiKey,omitempty"`
 	// MaxBodyBytes caps request bodies on both surfaces.
 	MaxBodyBytes int64 `json:"maxBodyBytes"`
 	// OutboundTimeoutSeconds bounds one call to ABDM (token, certs, gateway).
@@ -157,13 +185,16 @@ type Config struct {
 
 	TLS         TLS         `json:"tls"`
 	Participant Participant `json:"participant"`
-	Callback    Callback    `json:"callback"`
-	Certificate Certificate `json:"certificate"`
-	Ledger      Ledger      `json:"ledger"`
-	URLs        URLs        `json:"urls"`
-	Auth        Auth        `json:"auth"`
-	Certs       Certs       `json:"certs"`
-	Log         Log         `json:"log"`
+	// Participants are additional identities hosted by this gateway; see
+	// Participant. The default profile above is always first in AllParticipants.
+	Participants []Participant `json:"participants,omitempty"`
+	Callback     Callback      `json:"callback"`
+	Certificate  Certificate   `json:"certificate"`
+	Ledger       Ledger        `json:"ledger"`
+	URLs         URLs          `json:"urls"`
+	Auth         Auth          `json:"auth"`
+	Certs        Certs         `json:"certs"`
+	Log          Log           `json:"log"`
 
 	// Path the config was loaded from; "@file" references resolve relative to it.
 	path string
@@ -338,9 +369,36 @@ func (c *Config) applyDefaults() {
 	if c.CMID == "" {
 		c.CMID = cmID
 	}
-	c.Participant.ParticipantID = strings.TrimSpace(c.Participant.ParticipantID)
-	if c.Participant.ParticipantID != "" && !strings.HasSuffix(c.Participant.ParticipantID, "@hcx") {
-		c.Participant.ParticipantID += "@hcx"
+	normalizeParticipant(&c.Participant)
+	for i := range c.Participants {
+		normalizeParticipant(&c.Participants[i])
+	}
+}
+
+// normalizeParticipant applies the "@hcx" suffix and folds hcxkit's
+// "callbackUrl" spelling into the Callback struct, so everything downstream
+// only has to look at one field.
+func normalizeParticipant(p *Participant) {
+	p.ParticipantID = strings.TrimSpace(p.ParticipantID)
+	if p.ParticipantID != "" && !strings.HasSuffix(p.ParticipantID, "@hcx") {
+		p.ParticipantID += "@hcx"
+	}
+	if url := strings.TrimSpace(p.CallbackURL); url != "" {
+		if p.Callback == nil {
+			p.Callback = &Callback{}
+		}
+		if p.Callback.URL == "" {
+			p.Callback.URL = url
+		}
+	}
+	if p.Callback == nil {
+		return
+	}
+	for k, v := range p.Callback.Routes {
+		if nk := strings.Trim(strings.TrimSpace(k), "/"); nk != k {
+			delete(p.Callback.Routes, k)
+			p.Callback.Routes[nk] = v
+		}
 	}
 }
 
@@ -350,6 +408,12 @@ func (c *Config) ResolveFiles() error {
 	c.Participant.PrivateKey, err = c.readRef(c.Participant.PrivateKey)
 	if err != nil {
 		return fmt.Errorf("participant.privateKey: %w", err)
+	}
+	for i := range c.Participants {
+		c.Participants[i].PrivateKey, err = c.readRef(c.Participants[i].PrivateKey)
+		if err != nil {
+			return fmt.Errorf("participants[%d].privateKey: %w", i, err)
+		}
 	}
 	return nil
 }
@@ -405,6 +469,40 @@ func (c *Config) Validate() error {
 			errs = append(errs, fmt.Errorf("participant.privateKey is not a valid RSA private key: %w", err))
 		}
 	}
+	seen := map[string]int{}
+	if c.Participant.ParticipantID != "" {
+		seen[strings.ToLower(c.Participant.ParticipantID)] = -1
+	}
+	for i, p := range c.Participants {
+		where := fmt.Sprintf("participants[%d]", i)
+		if p.ParticipantID == "" {
+			// A hosted profile is addressed by its code; without one it can
+			// never be selected, and it would silently shadow the default.
+			errs = append(errs, fmt.Errorf("%s.participantId is required", where))
+		} else if prev, dup := seen[strings.ToLower(p.ParticipantID)]; dup {
+			if prev == -1 {
+				errs = append(errs, fmt.Errorf("%s.participantId %s duplicates participant.participantId", where, p.ParticipantID))
+			} else {
+				errs = append(errs, fmt.Errorf("%s.participantId %s duplicates participants[%d]", where, p.ParticipantID, prev))
+			}
+		} else {
+			seen[strings.ToLower(p.ParticipantID)] = i
+		}
+		// Credentials and key are optional — blank inherits the default —
+		// but a key that is present must be usable.
+		switch pk := strings.TrimSpace(p.PrivateKey); {
+		case pk == "":
+		case strings.HasPrefix(pk, "@"):
+			errs = append(errs, fmt.Errorf("%s.privateKey: %s was not read (call ResolveFiles first)", where, pk))
+		default:
+			if _, err := keys.ParsePrivateKey(pk); err != nil {
+				errs = append(errs, fmt.Errorf("%s.privateKey is not a valid RSA private key: %w", where, err))
+			}
+		}
+		if (p.ClientID == "") != (p.ClientSecret == "") {
+			errs = append(errs, fmt.Errorf("%s: clientId and clientSecret must be set together (or both left blank to inherit)", where))
+		}
+	}
 	if c.Certificate.ValidityDays < 1 || c.Certificate.ValidityDays > 3650 {
 		errs = append(errs, errors.New("certificate.validityDays must be between 1 and 3650"))
 	}
@@ -434,8 +532,21 @@ func (c *Config) Validate() error {
 // ValidateServe checks the fields only the HTTP server uses.
 func (c *Config) ValidateServe() error {
 	var errs []error
-	if err := checkURL(c.Callback.URL); err != nil {
-		errs = append(errs, fmt.Errorf("callback.url: %w", err))
+	// Every identity must end up with somewhere to deliver to — but not
+	// necessarily this block. A participant carrying its own callback (the
+	// default one included) needs nothing shared, so the top-level callback
+	// is required only when something still falls back to it. Reporting the
+	// participant that has no URL beats reporting a field that may not be
+	// the one missing.
+	for _, p := range c.AllParticipants() {
+		if c.CallbackFor(p).URL == "" {
+			who := p.ParticipantID
+			if who == "" {
+				who = "participant"
+			}
+			errs = append(errs, fmt.Errorf(
+				"no callback url for %s: set callback.url, or a callback.url on that participant", who))
+		}
 	}
 	if c.PublicURL != "" {
 		if err := checkURL(c.PublicURL); err != nil {
@@ -445,6 +556,23 @@ func (c *Config) ValidateServe() error {
 	for path, u := range c.Callback.Routes {
 		if err := checkURL(u); err != nil {
 			errs = append(errs, fmt.Errorf("callback.routes[%q]: %w", path, err))
+		}
+	}
+	for i, p := range c.Participants {
+		if p.Callback == nil {
+			continue
+		}
+		// A hosted profile with no URL of its own falls back to the default
+		// callback, which is checked above; only an explicit one is checked here.
+		if p.Callback.URL != "" {
+			if err := checkURL(p.Callback.URL); err != nil {
+				errs = append(errs, fmt.Errorf("participants[%d].callback.url: %w", i, err))
+			}
+		}
+		for path, u := range p.Callback.Routes {
+			if err := checkURL(u); err != nil {
+				errs = append(errs, fmt.Errorf("participants[%d].callback.routes[%q]: %w", i, path, err))
+			}
 		}
 	}
 	if (c.TLS.CertFile == "") != (c.TLS.KeyFile == "") {
@@ -476,6 +604,45 @@ func (c *Config) Environment() Environment { return Environment(c.Env) }
 // IsProduction reports whether this instance talks to production NHCX.
 func (c *Config) IsProduction() bool { return c.Environment() == Production }
 
+// APIKeyRequired reports whether a caller must present the API key.
+//
+// Production: always, and ValidateServe refuses to start without a key set.
+// Sandbox: no, even when a key is configured. A sandbox gateway is worked by
+// hand and by clients written for hcxkit, which authenticates none of these
+// routes — demanding a key there turns every call into a 401 for no security
+// anyone asked for. The key is still honoured when presented, so a client
+// that sends one is not punished for it.
+//
+// requireApiKey overrides both directions: set it true to close a sandbox
+// gateway that is reachable from the network, false to open a production one
+// (which ValidateServe will still complain about).
+func (c *Config) APIKeyRequired() bool {
+	if c.RequireAPIKey != nil {
+		return *c.RequireAPIKey
+	}
+	return c.IsProduction()
+}
+
+// RefusesSelfKey reports whether a registry certificate that turns out to be
+// one of ours, handed back for somebody else, should stop the message.
+//
+// In production it should: only the recipient can open a JWE, so encrypting
+// with our own key puts a payload on the wire that the far end cannot read —
+// and NHCX accepts it, so the failure surfaces over there, hours later, as
+// somebody else's problem.
+//
+// In the sandbox it should not. Participants there are routinely onboarded
+// under one credential and share a registered certificate, so the recipient
+// really does hold the key and really can decrypt. Refusing turns a working
+// sandbox into a wall of 422s. The condition is still logged, because it is
+// worth knowing about before the same config reaches production.
+func (c *Config) RefusesSelfKey() bool {
+	if c.Certs.RefuseSelfKey != nil {
+		return *c.Certs.RefuseSelfKey
+	}
+	return c.IsProduction()
+}
+
 // LedgerEnabled reports whether messages are recorded.
 func (c *Config) LedgerEnabled() bool { return c.Ledger.Enabled == nil || *c.Ledger.Enabled }
 
@@ -487,4 +654,65 @@ func (c *Config) LedgerStoresBodies() bool {
 // CallbackAppendsPath reports the resolved callback.appendPath.
 func (c *Config) CallbackAppendsPath() bool {
 	return c.Callback.AppendPath == nil || *c.Callback.AppendPath
+}
+
+// ------------------------------------------------------------- profiles ----
+
+// AllParticipants returns every identity this gateway holds, the default
+// profile first. Hosted profiles inherit the default's credentials and key
+// where they set none of their own, so what comes back is always usable.
+func (c *Config) AllParticipants() []Participant {
+	out := make([]Participant, 0, 1+len(c.Participants))
+	out = append(out, c.Participant)
+	for _, p := range c.Participants {
+		if p.ClientID == "" && p.ClientSecret == "" {
+			p.ClientID, p.ClientSecret = c.Participant.ClientID, c.Participant.ClientSecret
+		}
+		if strings.TrimSpace(p.PrivateKey) == "" {
+			p.PrivateKey = c.Participant.PrivateKey
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// CallbackFor merges a participant's callback over the top-level one. A
+// hosted profile that names only a URL keeps the shared timeout, API key,
+// appendPath and routes; one that sets a field wins on that field alone.
+func (c *Config) CallbackFor(p Participant) Callback {
+	cb := c.Callback
+	if p.Callback == nil {
+		return cb
+	}
+	if p.Callback.URL != "" {
+		cb.URL = p.Callback.URL
+		// Routes belong to the URL they were written for. A profile that
+		// redirects the base without restating them would otherwise scatter
+		// its traffic across two backends.
+		cb.Routes = p.Callback.Routes
+	}
+	if p.Callback.Routes != nil {
+		cb.Routes = p.Callback.Routes
+	}
+	if p.Callback.AppendPath != nil {
+		cb.AppendPath = p.Callback.AppendPath
+	}
+	if p.Callback.TimeoutSeconds > 0 {
+		cb.TimeoutSeconds = p.Callback.TimeoutSeconds
+	}
+	if p.Callback.APIKey != "" {
+		cb.APIKey = p.Callback.APIKey
+	}
+	return cb
+}
+
+// AppendsPath reports the resolved appendPath for a merged callback.
+func (cb Callback) AppendsPath() bool { return cb.AppendPath == nil || *cb.AppendPath }
+
+// Label names a participant for logs: its name when it has one, else its code.
+func (p Participant) Label() string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return p.ParticipantID
 }

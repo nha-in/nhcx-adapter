@@ -61,7 +61,7 @@ jobs:
           {
             echo "## nhcx-gateway ${GITHUB_REF_NAME}"
             echo
-            echo "Stateless NHCX adapter — one binary, one config. Pick your platform, unpack, run \`./nhcx-gateway config edit\` then \`./nhcx-gateway serve\`."
+            echo "Stateless NHCX adapter — one binary, one config. Pick your platform, unpack, run \`./nhcx-gateway config edit\` then \`./nhcx-gateway serve\` (or \`serve-hidden\` / \`stop\` / \`update\` scripts from the archive). Already installed? \`nhcx-gateway update --to ${GITHUB_REF_NAME}\`."
             echo
             echo "| Platform | Archive |"
             echo "| --- | --- |"

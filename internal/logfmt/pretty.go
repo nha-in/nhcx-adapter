@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"nhcx-gateway/internal/style"
 )
@@ -73,9 +74,9 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 	var line string
 	switch r.Message {
 	case "outbound":
-		line = traffic(r, kv, "▲ OUT", "→", kv["recipient"], "nhcx")
+		line = traffic(r, kv, "▲ OUT", "→", kv["recipient"], "nhcx", style.Out)
 	case "inbound":
-		line = traffic(r, kv, "▼ IN ", "←", kv["sender"], "callback")
+		line = traffic(r, kv, "▼ IN ", "←", kv["sender"], "callback", style.In)
 	default:
 		line = generic(r, kv, order)
 	}
@@ -87,10 +88,37 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 
 func stamp(t time.Time) string { return style.Dim(t.Format("15:04:05.000")) }
 
-// traffic renders one message line:
+// Column widths for the traffic lines. Every message crossing the gateway
+// prints the same fields in the same places, so a screenful can be read down
+// a column — "which of these failed", "which took a second" — instead of
+// being parsed line by line. A field wider than its column pushes that one
+// line out rather than being truncated: the value matters more than the grid.
 //
-//	12:01:05.123 ▲ OUT v1/preauth/submit → 1000004805@hcx  accepted  nhcx 202  412ms  corr 0f4c2b2e-9c7a-4d55-8a1e-2b1b0c7d9e11
-func traffic(r slog.Record, kv map[string]string, tag, arrow, peer, peerLabel string) string {
+// Padding is computed from the plain text, never the styled string, because
+// the colour escapes are bytes with no width and would skew every column.
+const (
+	colPath   = 31 // v1/coverageeligibility/on_check
+	colPeer   = 15 // 1000004805@hcx
+	colStatus = 15 // delivery_failed
+	colPeerHT = 13 // callback 200
+	colTook   = 7  // 2210ms
+	colFlags  = 21 // protocol  redelivery
+)
+
+// pad appends styled and the spaces that bring plain up to width.
+func pad(styled, plain string, width int) string {
+	if n := width - utf8.RuneCountInString(plain); n > 0 {
+		return styled + strings.Repeat(" ", n)
+	}
+	return styled
+}
+
+// traffic renders one message line, in columns:
+//
+//	12:01:05.123 ▲ OUT v1/preauth/submit             → 1000004805@hcx  accepted         nhcx 202      412ms                        0f4c2b2e-…
+//	12:01:05.480 ▼ IN  v1/preauth/on_submit          ← 1000004805@hcx  delivered        callback 200  480ms   redelivery           0f4c2b2e-…
+func traffic(r slog.Record, kv map[string]string, tag, arrow, peer, peerLabel string,
+	paint func(string) string) string {
 	status := kv["status"]
 	var st string
 	switch status {
@@ -104,35 +132,60 @@ func traffic(r slog.Record, kv map[string]string, tag, arrow, peer, peerLabel st
 	if peer == "" {
 		peer = "?"
 	}
+
 	var b strings.Builder
 	b.WriteString(stamp(r.Time) + " ")
-	if r.Level >= slog.LevelWarn {
-		b.WriteString(style.Bad(tag))
-	} else {
-		b.WriteString(style.Brand(tag))
-	}
-	fmt.Fprintf(&b, " %s %s %s  %s", style.Key(kv["path"]), style.Dim(arrow), style.Key(peer), st)
+	// The tag is the direction and only the direction — outbound and inbound
+	// keep their own colour even on a failure, because the status column two
+	// along is already red and colouring both says the same thing twice while
+	// losing the one thing the tag is for.
+	b.WriteString(paint(tag))
+	b.WriteString(" ")
+	b.WriteString(pad(style.Key(kv["path"]), kv["path"], colPath))
+	b.WriteString(" " + style.Dim(arrow) + " ")
+	b.WriteString(pad(style.Key(peer), peer, colPeer))
+	b.WriteString(" ")
+	b.WriteString(pad(st, status, colStatus))
+	b.WriteString(" ")
+
+	// The peer's HTTP answer: NHCX's status going out, the callback's coming in.
+	peerHT, peerHTPlain := "", ""
 	if code := kv[peerLabel]; code != "" && code != "0" {
-		fmt.Fprintf(&b, "  %s %s", style.Dim(peerLabel), code)
+		peerHTPlain = peerLabel + " " + code
+		peerHT = style.Dim(peerLabel) + " " + code
 	}
+	b.WriteString(pad(peerHT, peerHTPlain, colPeerHT))
+	b.WriteString(" ")
+
+	took, tookPlain := "", ""
 	if ms := kv["took_ms"]; ms != "" {
-		b.WriteString("  " + style.Dim(ms+"ms"))
+		tookPlain = ms + "ms"
+		took = style.Dim(tookPlain)
 	}
+	b.WriteString(pad(took, tookPlain, colTook))
+	b.WriteString(" ")
+
+	// Flags share one column so the correlation id starts in the same place
+	// whether a message was flagged or not.
+	var flags, flagsPlain []string
 	if kv["kind"] != "" && kv["kind"] != "fhir" {
-		b.WriteString("  " + style.Warn(kv["kind"]))
+		flags, flagsPlain = append(flags, style.Warn(kv["kind"])), append(flagsPlain, kv["kind"])
 	}
 	if kv["redelivery"] == "true" {
-		b.WriteString("  " + style.Warn("redelivery"))
+		flags, flagsPlain = append(flags, style.Warn("redelivery")), append(flagsPlain, "redelivery")
 	}
 	if e := kv["error"]; e != "" {
-		b.WriteString("  " + style.Bad(e))
+		flags, flagsPlain = append(flags, style.Bad(e)), append(flagsPlain, e)
 	}
+	b.WriteString(pad(strings.Join(flags, " "), strings.Join(flagsPlain, " "), colFlags))
+
 	// The correlation id is the handle for everything else — the thread in
 	// the ledger, the counterparty's records — so it is shown in full, last.
+	// It needs no label: it is the only bare uuid on the line.
 	if c := kv["correlation_id"]; c != "" {
-		b.WriteString("  " + style.Dim("corr ") + c)
+		b.WriteString(" " + c)
 	}
-	return b.String()
+	return strings.TrimRight(b.String(), " ")
 }
 
 // generic renders any other record: time, coloured level, message, then

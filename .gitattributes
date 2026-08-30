@@ -1,0 +1,3 @@
+# cmd.exe needs CRLF; everything else stays LF.
+*.bat text eol=crlf
+*.sh  text eol=lf

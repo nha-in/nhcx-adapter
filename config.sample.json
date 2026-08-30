@@ -5,10 +5,12 @@
   "apiKey": "${NHCX_GATEWAY_API_KEY}",
   "participant": {
     "participantId": "1000003463@hcx",
+    "name": "",
     "clientId": "${NHCX_CLIENT_ID}",
     "clientSecret": "${NHCX_CLIENT_SECRET}",
     "privateKey": "@private_key.pem"
   },
+  "participants": [],
   "callback": {
     "url": "http://127.0.0.1:8765/nhcx/callback",
     "appendPath": true,

@@ -1,8 +1,10 @@
 package tui
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -237,5 +239,40 @@ func TestSecretsMasked(t *testing.T) {
 	m.goTo(t, "participant.clientSecret")
 	if v := m.View(); !strings.Contains(v, "${S}") {
 		t.Error("env references are shown as-is")
+	}
+}
+
+// The editor is a form over the default profile and the shared sections; it
+// knows nothing about the "participants" array. It must still carry it
+// through a save untouched — silently dropping a gateway's other identities
+// would take their traffic down with them.
+func TestSavePreservesHostedParticipants(t *testing.T) {
+	const raw = `{
+	  "participant": {"participantId": "1000003463@hcx", "clientId": "cid"},
+	  "participants": [
+	    {"participantId": "1000004805@hcx", "name": "Dummy IRDAI Payer",
+	     "callback": {"url": "http://127.0.0.1:8082/nhcx/callback"}},
+	    {"participantId": "1000001518@hcx", "callbackUrl": "http://127.0.0.1:8090/cb"}
+	  ],
+	  "callback": {"url": "http://127.0.0.1:8765/nhcx/callback"}
+	}`
+	m, err := New(filepath.Join(t.TempDir(), "config.json"), []byte(raw), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := m.marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var got, want map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("saved file is not JSON: %v\n%s", err, out)
+	}
+	if err := json.Unmarshal([]byte(raw), &want); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got["participants"], want["participants"]) {
+		t.Errorf("participants changed on save:\n got %#v\nwant %#v", got["participants"], want["participants"])
 	}
 }

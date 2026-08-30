@@ -24,7 +24,9 @@ func newClient(t *testing.T, mode, sessionsURL string) *Client {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	// No participant set: the client falls back to the default profile's
+	// credentials, which is all these tests exercise.
+	return NewPool(cfg, nil, slog.New(slog.NewTextHandler(io.Discard, nil))).For(nil)
 }
 
 func TestGetSessionFormMode(t *testing.T) {
@@ -46,7 +48,8 @@ func TestGetSessionFormMode(t *testing.T) {
 	if err != nil || tok != "abc" {
 		t.Fatalf("token %q err %v", tok, err)
 	}
-	if ttl := time.Until(c.tokenExp); ttl < 19*time.Minute || ttl > 20*time.Minute {
+	_, exp, _ := c.TokenInfo(context.Background())
+	if ttl := time.Until(exp); ttl < 19*time.Minute || ttl > 20*time.Minute {
 		t.Errorf("expires_in not honoured: %s", ttl)
 	}
 	if _, err := c.Token(context.Background()); err != nil || calls != 1 {
@@ -79,7 +82,8 @@ func TestSessionsModeDefaultsTTLAndReportsRejection(t *testing.T) {
 	if _, err := c.Token(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if ttl := time.Until(c.tokenExp); ttl < 4*time.Minute || ttl > 5*time.Minute {
+	_, exp, _ := c.TokenInfo(context.Background())
+	if ttl := time.Until(exp); ttl < 4*time.Minute || ttl > 5*time.Minute {
 		t.Errorf("configured tokenTtlSeconds must apply when the response has no expiry: %s", ttl)
 	}
 }

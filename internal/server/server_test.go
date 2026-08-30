@@ -129,8 +129,13 @@ func newFixture(t *testing.T, apiKey string) *fixture {
 	}))
 	t.Cleanup(f.callback.Close)
 
+	// requireApiKey: the fixture is a sandbox gateway, where the key is
+	// accepted but not demanded by default. The tests that check enforcement
+	// need it demanded, so they ask for it explicitly.
 	cfgJSON := fmt.Sprintf(`{
 	  "apiKey": %q,
+	  "requireApiKey": true,
+	  "certs": {"refuseSelfKey": true},
 	  "participant": {"participantId": "1000003463", "clientId": "cid", "clientSecret": "sec", "privateKey": %q},
 	  "callback": {"url": %q, "apiKey": "cb-secret", "routes": {"v1/claim/on_submit": %q}},
 	  "urls": {"nhcx": %q, "participant": %q, "sessions": %q},
@@ -609,4 +614,92 @@ func TestLedger(t *testing.T) {
 		t.Errorf("ledger without key: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+// A sandbox gateway accepts the API key but does not demand it: the clients
+// written for hcxkit authenticate none of these routes, and 401ing them all
+// buys no security anybody asked for. Production is the opposite, and
+// requireApiKey overrides either way.
+func TestSandboxDoesNotDemandTheAPIKey(t *testing.T) {
+	f := newFixture(t, "")
+
+	// newFixture with no key leaves apiKey blank; build one that has a key
+	// configured but is left at the sandbox default.
+	cfgJSON := fmt.Sprintf(`{
+	  "apiKey": "sekrit",
+	  "participant": {"participantId": "1000003463", "clientId": "cid", "clientSecret": "sec", "privateKey": %q},
+	  "callback": {"url": %q},
+	  "urls": {"nhcx": %q, "participant": %q, "sessions": %q},
+	  "ledger": {"dir": %q},
+	  "log": {"level": "error"}
+	}`, pemPrivate(t, f.self), f.callback.URL+"/hook",
+		f.abdm.URL+"/hcx/v1", f.abdm.URL+"/registry", f.abdm.URL+"/sessions", t.TempDir())
+
+	cfg, err := config.Parse([]byte(cfgJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.APIKeyRequired() {
+		t.Fatal("a sandbox gateway should not demand the API key by default")
+	}
+	gw, err := gateway.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(New(gw, slog.New(slog.NewTextHandler(io.Discard, nil)), "test").Handler())
+	defer srv.Close()
+
+	// No Authorization header at all: the call is let through to be judged on
+	// its merits, not turned away at the door.
+	resp, err := http.Post(srv.URL+"/out/v1/preauth/submit", "application/json",
+		strings.NewReader(`{"recipient":"1000004805@hcx","fhir":{"resourceType":"Bundle"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Errorf("sandbox refused an unauthenticated call: %d", resp.StatusCode)
+	}
+
+	// Production demands it, whatever else is configured.
+	prod, err := config.Parse([]byte(strings.Replace(cfgJSON, `"apiKey": "sekrit",`,
+		`"apiKey": "sekrit", "env": "production",`, 1)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !prod.APIKeyRequired() {
+		t.Error("a production gateway must demand the API key")
+	}
+}
+
+// A registry certificate that turns out to be one of ours stops the message
+// in production — encrypting with it would put a payload on the wire that the
+// far end cannot read. In the sandbox it does not: participants there are
+// routinely onboarded under one credential and share a certificate, so the
+// recipient really can decrypt, and refusing would wall off a working sandbox.
+func TestSelfEncryptionKeyIsRefusedOnlyInProduction(t *testing.T) {
+	base := `{
+	  "participant": {"participantId": "1000003463", "clientId": "cid", "clientSecret": "sec", "privateKey": "KEY"},
+	  "callback": {"url": "http://127.0.0.1:1/cb"}%s
+	}`
+	for _, tc := range []struct {
+		name  string
+		extra string
+		want  bool
+	}{
+		{"sandbox allows it", "", false},
+		{"production refuses it", `, "env": "production", "apiKey": "k"`, true},
+		{"sandbox can opt in", `, "certs": {"refuseSelfKey": true}`, true},
+		{"production can opt out", `, "env": "production", "apiKey": "k", "certs": {"refuseSelfKey": false}`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg, err := config.Parse([]byte(fmt.Sprintf(base, tc.extra)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := cfg.RefusesSelfKey(); got != tc.want {
+				t.Errorf("RefusesSelfKey() = %v, want %v", got, tc.want)
+			}
+		})
+	}
 }
