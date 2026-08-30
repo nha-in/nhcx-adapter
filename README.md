@@ -1,4 +1,4 @@
-# nhcx-gateway
+# nhcx-adapter
 
 A small, stateless adapter between your system and India's National Health
 Claims Exchange (NHCX). One binary, one JSON config, no database.
@@ -19,11 +19,11 @@ production are one switch apart.
 ## Quick start
 
 ```sh
-make build                                  # → ./nhcx-gateway (Go 1.26, no CGO)
+make build                                  # → ./nhcx-adapter (Go 1.26, no CGO)
 
-export NHCX_CLIENT_ID=…  NHCX_CLIENT_SECRET=…  NHCX_GATEWAY_API_KEY=…
-./nhcx-gateway config edit                  # arrow-key form; creates config.json
-./nhcx-gateway serve                        # checks the setup, fixes what it can, then listens
+export NHCX_CLIENT_ID=…  NHCX_CLIENT_SECRET=…  NHCX_ADAPTER_API_KEY=…
+./nhcx-adapter config edit                  # arrow-key form; creates config.json
+./nhcx-adapter serve                        # checks the setup, fixes what it can, then listens
 ```
 
 `serve` verifies your credentials, participant record, encryption
@@ -42,7 +42,7 @@ stopped, and moved to another version without remembering any flags. See
 ## How it works
 
 ```
- your system                     nhcx-gateway                          NHCX
+ your system                     nhcx-adapter                          NHCX
  ───────────                     ────────────                          ────
  POST /out/v1/preauth/submit ──▶ headers · recipient cert · JWE ──▶ POST …/v1/preauth/submit
  {"recipient": "…", "fhir": …}   ◀── 202 + NHCX body ─────────────  202 Accepted
@@ -69,7 +69,7 @@ id is dropped) — so **your callback must be idempotent on
   "env": "sandbox",
   "listen": "127.0.0.1:8090",
   "publicUrl": "https://hcx.example.com/in",
-  "apiKey": "${NHCX_GATEWAY_API_KEY}",
+  "apiKey": "${NHCX_ADAPTER_API_KEY}",
   "participant": {
     "participantId": "1000003463@hcx",
     "clientId": "${NHCX_CLIENT_ID}",
@@ -87,11 +87,11 @@ the config. Unknown keys are rejected. Everything else has a default:
 | --- | --- | --- |
 | `env` | `sandbox` | `sandbox` or `production` — selects the NHCX gateway, registry, session endpoint and `X-CM-ID`. |
 | `listen` | `127.0.0.1:8090` | HTTP listener. |
-| `publicUrl` | — | How NHCX reaches this gateway from outside; proposed as the registry `endpoint_url`. |
+| `publicUrl` | — | How NHCX reaches this adapter from outside; proposed as the registry `endpoint_url`. |
 | `apiKey` | — | Bearer key your system sends to `/out` and `/token`. **Required in production.** |
 | `participant.participantId` | — | Your registry code (`@hcx` added if missing). |
 | `participant.name` | — | A label for logs and the banner. Cosmetic. |
-| `participants[]` | `[]` | Additional identities this gateway holds; see [Hosting several participants](#hosting-several-participants). |
+| `participants[]` | `[]` | Additional identities this adapter holds; see [Hosting several participants](#hosting-several-participants). |
 | `participant.clientId` / `clientSecret` | — | ABDM credentials from onboarding. |
 | `participant.privateKey` | — | RSA key of your registered certificate: PEM, base64 PEM or `@file`. |
 | `callback.url` | — | Where decrypted messages are POSTed. Per participant under `participants[].callback`. |
@@ -99,7 +99,7 @@ the config. Unknown keys are rejected. Everything else has a default:
 | `callback.routes` | `{}` | Per-path overrides, used verbatim: `{"v1/claim/on_submit": "http://claims/hook"}`. |
 | `callback.timeoutSeconds` | `20` | Time your backend has to accept a delivery (NHCX wants its 202 within 30 s). |
 | `callback.apiKey` | — | Sent to your backend as `Authorization: Bearer`. |
-| `ledger.enabled` | `true` | Record every message that crosses the gateway (see [Ledger](#ledger)). |
+| `ledger.enabled` | `true` | Record every message that crosses the adapter (see [Ledger](#ledger)). |
 | `ledger.dir` / `retentionDays` / `storeBodies` | `data/ledger` / `30` / `true` | Where records live; how long day folders are kept (0 = forever); whether bundles are stored or only headers and outcomes. |
 | `certificate.validityDays` | `365` | Lifetime of a generated certificate (subject is always your participant id). |
 | `certificate.privateKeyFile` / `certificateFile` | `private_key.pem` / `certificate.pem` | Where `cert generate` writes. |
@@ -162,16 +162,16 @@ What changes with more than one participant:
 
 | | |
 | --- | --- |
-| **Inbound** | The `x-hcx-recipient_code` in the JWE picks the participant. Its key decrypts (the others are tried as a fallback), its callback receives the delivery, and its `callback.apiKey` is the bearer token. A code no profile holds is refused with `WRONG_RECIPIENT`, which names every code this gateway does hold. |
-| **Outbound** | `x-hcx-sender_code` picks who sends: that participant's code goes in the protected header and its credentials mint the session token. Unset, it is the default profile — unchanged from a single-participant gateway. |
+| **Inbound** | The `x-hcx-recipient_code` in the JWE picks the participant. Its key decrypts (the others are tried as a fallback), its callback receives the delivery, and its `callback.apiKey` is the bearer token. A code no profile holds is refused with `WRONG_RECIPIENT`, which names every code this adapter does hold. |
+| **Outbound** | `x-hcx-sender_code` picks who sends: that participant's code goes in the protected header and its credentials mint the session token. Unset, it is the default profile — unchanged from a single-participant adapter. |
 | **Sessions** | One per distinct `clientId`. Profiles that inherit the default's credentials share its token rather than opening a second session for the same client. |
 | **Delivery envelope** | `meta.participant` names the addressee, and the callback also gets it as `X-Nhcx-Participant`. |
 | **`GET /token`** | `?participant=<code>` returns that identity's token. An unknown code is a 404 rather than a silent fallback. |
-| **`nhcx-gateway token`** | `--participant <code>` does the same on the command line. |
+| **`nhcx-adapter token`** | `--participant <code>` does the same on the command line. |
 | **Startup checks** | Each hosted participant gets its own line: its credentials must mint a session, and the registry certificate for its code must match the key it will decrypt with. |
 | **Ledger** | Unchanged — `sender` and `recipient` were already recorded, so `GET /ledger?participant=<code>` filters one identity's traffic. |
 
-Encrypting for a code this gateway itself holds is allowed (a loopback test,
+Encrypting for a code this adapter itself holds is allowed (a loopback test,
 or one hosted participant writing to another); encrypting for an outside
 participant with one of our own certificates is still refused as
 `SELF_ENCRYPTION_KEY`.
@@ -183,7 +183,7 @@ its certificate yourself.
 
 ### The editor
 
-`nhcx-gateway config edit` is a full-screen form over the default profile and
+`nhcx-adapter config edit` is a full-screen form over the default profile and
 the shared sections. The `participants` array is edited by hand; the editor
 preserves it. Otherwise:
 **↑/↓** move · **Enter** edit · **←/→** cycle choices / toggle / step numbers ·
@@ -204,28 +204,28 @@ checking setup for 1000003463@hcx (sandbox)…
   ✓ participant record       1000003463@hcx · Healthica · endpoint https://hcx.example.com/in
   ✓ encryption certificate   registry certificate matches participant.privateKey
   ✓ local listener           127.0.0.1:8090 (started for this check)
-  ✓ registered endpoint      https://hcx.example.com/in/healthz reaches this gateway (probe acknowledged)
+  ✓ registered endpoint      https://hcx.example.com/in/healthz reaches this adapter (probe acknowledged)
 ```
 
-| Check | Fails when | In a terminal, the gateway offers to… |
+| Check | Fails when | In a terminal, the adapter offers to… |
 | --- | --- | --- |
 | Config | file missing, `clientId`/`clientSecret`/`participantId` unset, key file missing or not an RSA key, bad URL | open the editor with the problem shown at the top; re-check on save |
 | Session token | credentials refused, endpoint unreachable | reopen the editor with the registry's answer |
 | Participant record | `/participant/search` finds nothing | report (not fatal) |
 | Encryption certificate | registry certificate is missing or belongs to another key | **generate a new key + certificate and upload it** to the registry; generate only; upload the current key's certificate; open the editor; continue; quit |
-| Registered endpoint | `endpoint_url` does not lead to this gateway | **update the registry** to `publicUrl` or a URL you type; re-test; continue; quit |
+| Registered endpoint | `endpoint_url` does not lead to this adapter | **update the registry** to `publicUrl` or a URL you type; re-test; continue; quit |
 
 The endpoint check POSTs `{"probe": "<random nonce>"}` to
-`<endpoint_url>/healthz` and expects `probe_ack`, an HMAC only a gateway
+`<endpoint_url>/healthz` and expects `probe_ack`, an HMAC only an adapter
 with the same configuration can produce — so a proxy that answers 200 with
 something else is caught, and nothing secret travels on the wire. The
 listener is started first (or an already-running instance is used), so the
-result is about the proxy hop, never about a gateway that was not up.
+result is about the proxy hop, never about an adapter that was not up.
 
 Without a terminal the same checks run; config, token and certificate
 failures exit non-zero with the reason, an endpoint failure is logged as a
 warning. Flags: `--no-tui` (never prompt), `--skip-checks` (start
-regardless), `--no-banner` / `NHCX_GATEWAY_NO_BANNER=1` (no startup
+regardless), `--no-banner` / `NHCX_ADAPTER_NO_BANNER=1` (no startup
 banner in the logs).
 
 ---
@@ -238,7 +238,7 @@ Requires `Authorization: Bearer <apiKey>` (or `X-Api-Key`).
 
 ```sh
 curl -s http://127.0.0.1:8090/out/v1/preauth/submit \
-  -H "Authorization: Bearer $NHCX_GATEWAY_API_KEY" -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $NHCX_ADAPTER_API_KEY" -H 'Content-Type: application/json' \
   -d '{"recipient": "1000004805@hcx", "fhir": { …Bundle… }}'
 ```
 
@@ -289,8 +289,8 @@ See [Ledger](#ledger) below.
 
 ### `GET /token` · `POST /token/refresh`
 
-The ABDM session token the gateway holds (for ABDM calls this adapter does
-not make), or a freshly minted one. Requires the API key; `Cache-Control:
+The ABDM session token the adapter holds (for ABDM calls it does not
+make), or a freshly minted one. Requires the API key; `Cache-Control:
 no-store`.
 
 ```json
@@ -306,7 +306,7 @@ Liveness; readiness (503 until a session token is held). Unauthenticated.
 
 ## Ledger
 
-Every message that crosses the gateway is recorded — protected headers,
+Every message that crosses the adapter is recorded — protected headers,
 the bundle, and what happened to it — as one JSON file per message under
 `ledger.dir/<yyyy-mm-dd>/` with a per-day index. No database; the index is
 loaded at startup and pruned hourly by `retentionDays`.
@@ -346,10 +346,10 @@ Every `/out` answer and every `/in` acknowledgement carries the entry's id
 **CLI** (reads the files directly, no server needed):
 
 ```sh
-nhcx-gateway ledger list --since 24h --entity preauth --status rejected
-nhcx-gateway ledger show 20260826T101512.483920Z-3fa1c2d9
-nhcx-gateway ledger thread 0f4c2b2e-9c7a-4d55-8a1e-2b1b0c7d9e11
-nhcx-gateway ledger stats
+nhcx-adapter ledger list --since 24h --entity preauth --status rejected
+nhcx-adapter ledger show 20260826T101512.483920Z-3fa1c2d9
+nhcx-adapter ledger thread 0f4c2b2e-9c7a-4d55-8a1e-2b1b0c7d9e11
+nhcx-adapter ledger stats
 ```
 
 Add `--json` to any of them for machine-readable output.
@@ -366,22 +366,22 @@ is a string comparison.
 ## Command line
 
 ```
-nhcx-gateway serve    [--no-tui] [--skip-checks] [--no-banner]   check the setup, then listen
-nhcx-gateway check    [--no-tui] [--endpoint URL]                check (and offer fixes), then exit 0/1
-nhcx-gateway send     --path v1/preauth/submit --recipient CODE [--file bundle.json] [--sender C]
+nhcx-adapter serve    [--no-tui] [--skip-checks] [--no-banner]   check the setup, then listen
+nhcx-adapter check    [--no-tui] [--endpoint URL]                check (and offer fixes), then exit 0/1
+nhcx-adapter send     --path v1/preauth/submit --recipient CODE [--file bundle.json] [--sender C]
                       [--correlation-id ID] [--workflow-id ID] [--status S]
-nhcx-gateway cert     CODE [--refresh]                           print a counterparty's certificate
-nhcx-gateway cert generate [--days N] [--force]                  create your key + certificate
-nhcx-gateway token                                               print a fresh session token
-nhcx-gateway decrypt  [--file jwe-or-callback.json]              decrypt a JWE with your key
-nhcx-gateway config init|edit [FILE]                             write the sample / open the editor
-nhcx-gateway ledger list|show|thread|stats [--json]              browse the traffic ledger
-nhcx-gateway update   [--list] [--check] [--latest] [--to TAG] [-y] [--prerelease]
+nhcx-adapter cert     CODE [--refresh]                           print a counterparty's certificate
+nhcx-adapter cert generate [--days N] [--force]                  create your key + certificate
+nhcx-adapter token                                               print a fresh session token
+nhcx-adapter decrypt  [--file jwe-or-callback.json]              decrypt a JWE with your key
+nhcx-adapter config init|edit [FILE]                             write the sample / open the editor
+nhcx-adapter ledger list|show|thread|stats [--json]              browse the traffic ledger
+nhcx-adapter update   [--list] [--check] [--latest] [--to TAG] [-y] [--prerelease]
                                                                  list GitHub releases; upgrade or downgrade
-nhcx-gateway version
+nhcx-adapter version
 ```
 
-All commands take `--config FILE` (default `$NHCX_GATEWAY_CONFIG`, then
+All commands take `--config FILE` (default `$NHCX_ADAPTER_CONFIG`, then
 `./config.json`). `send` and `serve` share one code path, so a `send` that
 works means `serve` will. `cert generate` never overwrites without
 `--force`, and then keeps the old files as `.bak-<timestamp>`.
@@ -397,10 +397,10 @@ double-click.
 
 | Windows | Linux / macOS / FreeBSD | Does |
 | --- | --- | --- |
-| `serve.bat` | `./serve.sh` | `nhcx-gateway serve` in this window; Ctrl+C stops it. Extra arguments pass through (`serve.bat --skip-checks`). |
-| `serve-hidden.bat` | `./serve-hidden.sh` | Starts `serve --no-tui` in the background with no window/terminal. Output goes to `logs/nhcx-gateway.log` (the previous run is kept as `logs/nhcx-gateway.prev.log`), the process id to `nhcx-gateway.pid`. Waits a few seconds and, if the startup checks failed, prints the tail of the log. Refuses to start a second instance. |
+| `serve.bat` | `./serve.sh` | `nhcx-adapter serve` in this window; Ctrl+C stops it. Extra arguments pass through (`serve.bat --skip-checks`). |
+| `serve-hidden.bat` | `./serve-hidden.sh` | Starts `serve --no-tui` in the background with no window/terminal. Output goes to `logs/nhcx-adapter.log` (the previous run is kept as `logs/nhcx-adapter.prev.log`), the process id to `nhcx-adapter.pid`. Waits a few seconds and, if the startup checks failed, prints the tail of the log. Refuses to start a second instance. |
 | `stop.bat` | `./stop.sh` | Stops the background server: asks it to shut down (in-flight requests drain for up to 30 s), then forces it. Without a pid file it falls back to finding the process by name. |
-| `update.bat` | `./update.sh` | `nhcx-gateway update` with the same arguments, then reminds you to `stop` + `serve-hidden` if a server is running on the old version. |
+| `update.bat` | `./update.sh` | `nhcx-adapter update` with the same arguments, then reminds you to `stop` + `serve-hidden` if a server is running on the old version. |
 
 The Windows hidden start uses `powershell Start-Process -WindowStyle Hidden`,
 which is present on every supported Windows; nothing is installed as a
@@ -411,12 +411,12 @@ service. For a service or boot-time start use Task Scheduler / NSSM
 
 ## Updating
 
-`nhcx-gateway update` looks at the GitHub releases of this project and
+`nhcx-adapter update` looks at the GitHub releases of this project and
 installs whichever one you pick in place of the running binary — newer
 **or older**, so a bad release is a one-command rollback.
 
 ```
-$ nhcx-gateway update
+$ nhcx-adapter update
 fetching releases from github.com/nha-in/nhcx-adapter…
 installed v1.0.0 linux/amd64
 latest    v1.2.0 — update available
@@ -452,15 +452,15 @@ Without a terminal (`serve-hidden`, cron, CI) only `--latest` / `--to` /
 `serve` also checks once at startup, in the background with a 15 s cap, and
 logs `update available installed=v1.0.0 latest=v1.2.0` if there is one — it
 never blocks or fails the start. Turn that off with `--no-update-check` or
-`NHCX_GATEWAY_NO_UPDATE_CHECK=1`.
+`NHCX_ADAPTER_NO_UPDATE_CHECK=1`.
 
-Environment: `NHCX_GATEWAY_UPDATE_REPO` (default `nha-in/nhcx-adapter`),
-`GITHUB_TOKEN` / `NHCX_GATEWAY_GITHUB_TOKEN` (needed for a **private**
+Environment: `NHCX_ADAPTER_UPDATE_REPO` (default `nha-in/nhcx-adapter`),
+`GITHUB_TOKEN` / `NHCX_ADAPTER_GITHUB_TOKEN` (needed for a **private**
 repository, otherwise only raises the API rate limit),
-`NHCX_GATEWAY_GITHUB_API` (GitHub Enterprise base URL). The binary has to be
+`NHCX_ADAPTER_GITHUB_API` (GitHub Enterprise base URL). The binary has to be
 writable by the user running `update`; a `/usr/local/bin` install owned by
-root needs `sudo nhcx-gateway update`. On Windows the previous binary is
-parked as `nhcx-gateway.exe.old` while a server still runs it and deleted at
+root needs `sudo nhcx-adapter update`. On Windows the previous binary is
+parked as `nhcx-adapter.exe.old` while a server still runs it and deleted at
 the next start. Dev builds (`version` shows something other than a tag)
 list releases but never report *update available*, since there is nothing
 to compare.
@@ -508,15 +508,15 @@ every target on each push — the archives hang off the workflow run under
 git tag v1.0.0 && git push origin v1.0.0
 ```
 
-produces release **nhcx-gateway v1.0.0** with one archive per platform, a
+produces release **nhcx-adapter v1.0.0** with one archive per platform, a
 `SHA256SUMS`, and auto-generated notes. The version inside the binary comes
 from `git describe`, so it matches the tag. Each archive contains the
 binary, `README.md`, `config.sample.json` and the launcher scripts from
-`scripts/pkg/windows/*.bat` or `scripts/pkg/unix/*.sh`. `nhcx-gateway
+`scripts/pkg/windows/*.bat` or `scripts/pkg/unix/*.sh`. `nhcx-adapter
 update` relies on exactly this layout — the archive name
-`nhcx-gateway_<tag>_<os>_<arch>.tar.gz|.zip` and the `SHA256SUMS` — so keep
-it if you fork the release process, and point `NHCX_GATEWAY_UPDATE_REPO`
-(or `-X nhcx-gateway/internal/update.DefaultRepo=…` at build time) at your
+`nhcx-adapter_<tag>_<os>_<arch>.tar.gz|.zip` and the `SHA256SUMS` — so keep
+it if you fork the release process, and point `NHCX_ADAPTER_UPDATE_REPO`
+(or `-X nhcx-adapter/internal/update.DefaultRepo=…` at build time) at your
 repository.
 
 ---
@@ -530,10 +530,10 @@ repository.
 | `encryption certificate … does NOT match` | registry holds a certificate for another key | pick *generate + upload* in the menu, or *upload the current key's certificate* |
 | `CERT_NOT_FOUND` on `/out` | the recipient has no certificate on the registry | they must register one; nothing you can do locally |
 | `SELF_ENCRYPTION_KEY` | registry handed out *your* certificate for another code | refresh with `cert CODE --refresh`; contact the registry |
-| `registered endpoint … without a probe acknowledgement` | the URL is answered by something other than this gateway (proxy error page, hcxkit, …) | route the path to `listen`; then *update the registry* in the menu or set `publicUrl` |
+| `registered endpoint … without a probe acknowledgement` | the URL is answered by something other than this adapter (proxy error page, hcxkit, …) | route the path to `listen`; then *update the registry* in the menu or set `publicUrl` |
 | `WRONG_RECIPIENT` on `/in` | a message addressed to another participant reached you | check the registry's `endpoint_url` for that participant |
 | `DECRYPT_FAILED` on `/in` | encrypted for a key you don't hold | your registered certificate is not this key — run `check` |
 | callback returns 4xx/5xx | your backend rejected the delivery | NHCX will retry five times; fix the backend, keep it idempotent |
 
-Verify a counterparty's certificate: `nhcx-gateway cert 1000004805@hcx`.
-Inspect a callback you captured: `nhcx-gateway decrypt --file body.json`.
+Verify a counterparty's certificate: `nhcx-adapter cert 1000004805@hcx`.
+Inspect a callback you captured: `nhcx-adapter decrypt --file body.json`.

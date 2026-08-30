@@ -1,8 +1,8 @@
-// Package preflight verifies, before the gateway serves anything, that it
+// Package preflight verifies, before the adapter serves anything, that it
 // can actually work: the credentials mint a session token, the participant
 // exists on the registry, the registry's encryption certificate is the one
-// this gateway's private key opens, and — once the listener is up — the
-// endpoint registered for the participant leads back to this gateway.
+// this adapter's private key opens, and — once the listener is up — the
+// endpoint registered for the participant leads back to this adapter.
 package preflight
 
 import (
@@ -16,10 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"nhcx-gateway/internal/abdm"
-	"nhcx-gateway/internal/gateway"
-	"nhcx-gateway/internal/keys"
-	"nhcx-gateway/internal/probe"
+	"nhcx-adapter/internal/abdm"
+	"nhcx-adapter/internal/adapter"
+	"nhcx-adapter/internal/keys"
+	"nhcx-adapter/internal/probe"
 )
 
 // CertState is the verdict on the registry's certificate for this participant.
@@ -68,7 +68,7 @@ func (r *Report) add(name string, ok bool, detail string) {
 
 // Run performs the network checks. It never panics and never blocks longer
 // than the ABDM client's timeout per call.
-func Run(ctx context.Context, gw *gateway.Gateway) *Report {
+func Run(ctx context.Context, gw *adapter.Adapter) *Report {
 	r := &Report{Cert: CertUnknown}
 	cfg := gw.Config()
 	client := gw.ABDM()
@@ -137,7 +137,7 @@ func Run(ctx context.Context, gw *gateway.Gateway) *Report {
 // These are reported but not repaired: the interactive fix flow (generate a
 // certificate, re-register an endpoint) acts on the default profile, and
 // pointing it at a hosted one would need a participant to be chosen first.
-func checkHosted(ctx context.Context, gw *gateway.Gateway, r *Report) {
+func checkHosted(ctx context.Context, gw *adapter.Adapter, r *Report) {
 	profiles := gw.Profiles()
 	if !profiles.Hosted() {
 		return
@@ -176,9 +176,9 @@ func checkHosted(ctx context.Context, gw *gateway.Gateway, r *Report) {
 }
 
 // TestEndpoint checks that the endpoint_url registered for the participant
-// leads to a gateway running with this configuration: it POSTs
+// leads to an adapter running with this configuration: it POSTs
 // {"probe": nonce} to <endpoint>/healthz and verifies the "probe_ack" in
-// the JSON answer — an HMAC only a gateway with the same key can produce.
+// the JSON answer — an HMAC only an adapter with the same key can produce.
 // key comes from probe.Key(cfg). Call it after the listener is up.
 func TestEndpoint(ctx context.Context, endpointURL string, key []byte) Check {
 	const name = "registered endpoint"
@@ -201,7 +201,7 @@ func TestEndpoint(ctx context.Context, endpointURL string, key []byte) Check {
 	// No compression on the probe: some proxies buffer or rewrite encoded
 	// responses, and Go would otherwise advertise gzip on its own.
 	req.Header.Set("Accept-Encoding", "identity")
-	req.Header.Set("User-Agent", "nhcx-gateway-check")
+	req.Header.Set("User-Agent", "nhcx-adapter-check")
 	resp, err := (&http.Client{
 		Timeout:   15 * time.Second,
 		Transport: &http.Transport{DisableCompression: true, Proxy: http.ProxyFromEnvironment},
@@ -227,13 +227,13 @@ func TestEndpoint(ctx context.Context, endpointURL string, key []byte) Check {
 		if excerpt != "" {
 			excerpt = " — body: " + excerpt
 		}
-		return Check{Name: name, OK: false, Detail: fmt.Sprintf("%s answered %d%s without a probe acknowledgement%s — the proxy at that URL is not forwarding to this gateway's listen address", u, resp.StatusCode, who, excerpt)}
+		return Check{Name: name, OK: false, Detail: fmt.Sprintf("%s answered %d%s without a probe acknowledgement%s — the proxy at that URL is not forwarding to this adapter's listen address", u, resp.StatusCode, who, excerpt)}
 	case !probe.Verify(key, nonce, ans.ProbeAck):
-		return Check{Name: name, OK: false, Detail: u + " is an nhcx-gateway, but not one running with this configuration (different participant or credentials)"}
+		return Check{Name: name, OK: false, Detail: u + " is an nhcx-adapter, but not one running with this configuration (different participant or credentials)"}
 	case resp.StatusCode != http.StatusOK:
-		return Check{Name: name, OK: false, Detail: fmt.Sprintf("%s reaches this gateway but answered %d", u, resp.StatusCode)}
+		return Check{Name: name, OK: false, Detail: fmt.Sprintf("%s reaches this adapter but answered %d", u, resp.StatusCode)}
 	}
-	return Check{Name: name, OK: true, Detail: u + " reaches this gateway (probe acknowledged)"}
+	return Check{Name: name, OK: true, Detail: u + " reaches this adapter (probe acknowledged)"}
 }
 
 // explain renders an error for an operator: code, message, and the

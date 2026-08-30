@@ -1,4 +1,4 @@
-// Package keys parses the RSA material the gateway works with: its own
+// Package keys parses the RSA material the adapter works with: its own
 // private key from the config, and the recipients' public certificates the
 // participant registry hands out.
 package keys

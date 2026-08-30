@@ -11,10 +11,10 @@ import (
 	"strings"
 	"testing"
 
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/gateway"
-	"nhcx-gateway/internal/keys"
-	"nhcx-gateway/internal/probe"
+	"nhcx-adapter/internal/adapter"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/keys"
+	"nhcx-adapter/internal/probe"
 )
 
 type fake struct {
@@ -62,7 +62,7 @@ func newFake(t *testing.T) *fake {
 	return f
 }
 
-func newGateway(t *testing.T, f *fake, privPEM string) *gateway.Gateway {
+func newAdapter(t *testing.T, f *fake, privPEM string) *adapter.Adapter {
 	t.Helper()
 	cfg, err := config.Parse([]byte(fmt.Sprintf(`{
 	  "participant": {"participantId": "1000003463", "clientId": "c", "clientSecret": "s", "privateKey": %q},
@@ -72,7 +72,7 @@ func newGateway(t *testing.T, f *fake, privPEM string) *gateway.Gateway {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gw, err := gateway.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gw, err := adapter.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,33 +85,33 @@ func TestRun(t *testing.T) {
 	f := newFake(t)
 
 	f.cert = mine.Certificate
-	rep := Run(context.Background(), newGateway(t, f, mine.PrivateKey))
+	rep := Run(context.Background(), newAdapter(t, f, mine.PrivateKey))
 	if rep.Fatal() || !rep.Healthy() || rep.Cert != CertMatch || rep.Participant == nil || rep.Participant.EndpointURL != "https://example.invalid/in" || rep.Participant.Roles[0] != "10001" {
 		t.Errorf("healthy setup: %+v", rep)
 	}
 
 	f.cert = other.Certificate
-	rep = Run(context.Background(), newGateway(t, f, mine.PrivateKey))
+	rep = Run(context.Background(), newAdapter(t, f, mine.PrivateKey))
 	if rep.Cert != CertMismatch || rep.Healthy() {
 		t.Errorf("mismatch: %+v", rep.Checks)
 	}
 
 	f.cert = "Invalid Certificate Found"
 	f.hasRecord = false
-	rep = Run(context.Background(), newGateway(t, f, mine.PrivateKey))
+	rep = Run(context.Background(), newAdapter(t, f, mine.PrivateKey))
 	if rep.Cert != CertMissing || rep.Participant != nil {
 		t.Errorf("missing: %+v", rep.Checks)
 	}
 
 	f.tokenOK = false
-	rep = Run(context.Background(), newGateway(t, f, mine.PrivateKey))
+	rep = Run(context.Background(), newAdapter(t, f, mine.PrivateKey))
 	if !rep.Fatal() || len(rep.Checks) != 1 || rep.Checks[0].OK {
 		t.Errorf("token failure must be fatal and stop early: %+v", rep.Checks)
 	}
 
 	// Upload path used by the interactive fix.
 	f.tokenOK = true
-	gw := newGateway(t, f, mine.PrivateKey)
+	gw := newAdapter(t, f, mine.PrivateKey)
 	if _, err := gw.ABDM().UpdateCertificate(context.Background(), mine.Certificate, []string{"10001"}); err != nil {
 		t.Errorf("update: %v", err)
 	}

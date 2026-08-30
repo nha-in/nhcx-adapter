@@ -14,12 +14,12 @@ import (
 )
 
 // DefaultRepo is the GitHub repository whose releases are consulted. The
-// build can override it with -X nhcx-gateway/internal/update.DefaultRepo=…
-// and the operator with NHCX_GATEWAY_UPDATE_REPO.
+// build can override it with -X nhcx-adapter/internal/update.DefaultRepo=…
+// and the operator with NHCX_ADAPTER_UPDATE_REPO.
 var DefaultRepo = "nha-in/nhcx-adapter"
 
 // Name is the binary's base name inside the release archives.
-const Name = "nhcx-gateway"
+const Name = "nhcx-adapter"
 
 // Release is one GitHub release: a tag with its downloadable archives.
 type Release struct {
@@ -52,21 +52,21 @@ type Client struct {
 }
 
 // NewClient builds a client for repo (DefaultRepo when empty), taking the
-// repository from NHCX_GATEWAY_UPDATE_REPO, the token from
-// NHCX_GATEWAY_GITHUB_TOKEN or GITHUB_TOKEN, and the API base from
-// NHCX_GATEWAY_GITHUB_API (GitHub Enterprise) when set.
+// repository from NHCX_ADAPTER_UPDATE_REPO, the token from
+// NHCX_ADAPTER_GITHUB_TOKEN or GITHUB_TOKEN, and the API base from
+// NHCX_ADAPTER_GITHUB_API (GitHub Enterprise) when set.
 func NewClient(repo string) *Client {
-	if env := os.Getenv("NHCX_GATEWAY_UPDATE_REPO"); env != "" {
+	if env := os.Getenv("NHCX_ADAPTER_UPDATE_REPO"); env != "" {
 		repo = env
 	}
 	if repo == "" {
 		repo = DefaultRepo
 	}
-	token := os.Getenv("NHCX_GATEWAY_GITHUB_TOKEN")
+	token := os.Getenv("NHCX_ADAPTER_GITHUB_TOKEN")
 	if token == "" {
 		token = os.Getenv("GITHUB_TOKEN")
 	}
-	return &Client{Repo: repo, Token: token, APIBase: os.Getenv("NHCX_GATEWAY_GITHUB_API")}
+	return &Client{Repo: repo, Token: token, APIBase: os.Getenv("NHCX_ADAPTER_GITHUB_API")}
 }
 
 func (c *Client) http() *http.Client {
@@ -152,7 +152,7 @@ func apiError(repo string, resp *http.Response, body []byte) error {
 	_ = json.Unmarshal(body, &msg)
 	switch resp.StatusCode {
 	case http.StatusNotFound:
-		return fmt.Errorf("github: repository %s not found (private? set GITHUB_TOKEN; wrong repo? set NHCX_GATEWAY_UPDATE_REPO)", repo)
+		return fmt.Errorf("github: repository %s not found (private? set GITHUB_TOKEN; wrong repo? set NHCX_ADAPTER_UPDATE_REPO)", repo)
 	case http.StatusUnauthorized:
 		return fmt.Errorf("github: token rejected: %s", msg.Message)
 	case http.StatusForbidden, http.StatusTooManyRequests:

@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// The shared callback block is a default, not a requirement: a gateway whose
+// The shared callback block is a default, not a requirement: an adapter whose
 // participants each name their own has nothing to fall back to and should not
 // be made to invent one.
 func TestCallbackBlockIsOptionalWhenEveryParticipantHasOne(t *testing.T) {

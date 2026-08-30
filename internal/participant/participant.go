@@ -1,6 +1,6 @@
 // Package participant resolves which local identity a message belongs to.
 //
-// The gateway historically held exactly one — the top-level "participant"
+// The adapter historically held exactly one — the top-level "participant"
 // config section. It can now also host additional profiles from the
 // "participants" array, each with its own registry code and callback, so one
 // process can front a provider and a payer at once. The default profile is
@@ -16,9 +16,9 @@ import (
 	"fmt"
 	"strings"
 
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/keys"
-	"nhcx-gateway/internal/nhcx"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/keys"
+	"nhcx-adapter/internal/nhcx"
 )
 
 // Profile is one resolved identity: its config entry, its parsed key and the
@@ -50,7 +50,7 @@ func (p *Profile) PublicKey() *rsa.PublicKey {
 	return &p.Key.PublicKey
 }
 
-// Set is every profile a gateway holds, the default first. Every method is
+// Set is every profile an adapter holds, the default first. Every method is
 // safe on a nil Set, which reads as "no identities configured".
 type Set struct {
 	profiles []*Profile
@@ -58,7 +58,7 @@ type Set struct {
 }
 
 // Build resolves every profile in cfg. It fails when a profile's key cannot
-// be parsed — a gateway that cannot decrypt for an identity it advertises
+// be parsed — an adapter that cannot decrypt for an identity it advertises
 // would only discover that on the first live message.
 func Build(cfg *config.Config) (*Set, error) {
 	all := cfg.AllParticipants()
@@ -114,7 +114,7 @@ func (s *Set) All() []*Profile {
 	return s.profiles
 }
 
-// Len is how many identities this gateway holds.
+// Len is how many identities this adapter holds.
 func (s *Set) Len() int {
 	if s == nil {
 		return 0
@@ -147,7 +147,7 @@ func (s *Set) Resolve(code string) *Profile {
 	return s.Default()
 }
 
-// IsLocal reports whether code is one of this gateway's own identities.
+// IsLocal reports whether code is one of this adapter's own identities.
 func (s *Set) IsLocal(code string) bool { return s.ByCode(code) != nil }
 
 // Codes lists every configured code, the default first.
@@ -161,7 +161,7 @@ func (s *Set) Codes() []string {
 	return out
 }
 
-// OwnsKey reports whether pub is one of this gateway's own encryption keys.
+// OwnsKey reports whether pub is one of this adapter's own encryption keys.
 // Used to catch a registry answer that hands back our own certificate for
 // somebody else: only the recipient can open a JWE, so encrypting with our
 // key would put an unreadable payload on the wire.

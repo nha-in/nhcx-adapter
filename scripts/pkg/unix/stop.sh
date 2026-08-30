@@ -1,22 +1,22 @@
 #!/usr/bin/env sh
-# Stop the nhcx-gateway started by ./serve-hidden.sh.
+# Stop the nhcx-adapter started by ./serve-hidden.sh.
 # Sends SIGTERM (in-flight requests drain for up to 30 s), then SIGKILL if
 # it is still there.
 cd "$(dirname "$0")" || exit 1
-PIDFILE=nhcx-gateway.pid
+PIDFILE=nhcx-adapter.pid
 
 if [ ! -f "$PIDFILE" ]; then
-  if pkill -TERM -f 'nhcx-gateway serve' 2>/dev/null; then
-    echo "nhcx-gateway stopped"
+  if pkill -TERM -f 'nhcx-adapter serve' 2>/dev/null; then
+    echo "nhcx-adapter stopped"
   else
-    echo "nhcx-gateway is not running"
+    echo "nhcx-adapter is not running"
   fi
   exit 0
 fi
 
 PID=$(cat "$PIDFILE")
 if ! kill -0 "$PID" 2>/dev/null; then
-  echo "nhcx-gateway is not running (stale pid $PID)"
+  echo "nhcx-adapter is not running (stale pid $PID)"
   rm -f "$PIDFILE"
   exit 0
 fi
@@ -33,4 +33,4 @@ while kill -0 "$PID" 2>/dev/null; do
   sleep 1
 done
 rm -f "$PIDFILE"
-echo "nhcx-gateway stopped"
+echo "nhcx-adapter stopped"

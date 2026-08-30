@@ -1,5 +1,5 @@
 // Package ledger keeps a record of every FHIR message that crossed the
-// gateway — headers, bundle, and what happened to it — so an operator or an
+// adapter — headers, bundle, and what happened to it — so an operator or an
 // agent can answer "what did we send, what came back, and where does this
 // correlation id stand?" without a database.
 //
@@ -21,10 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"nhcx-gateway/internal/nhcx"
+	"nhcx-adapter/internal/nhcx"
 )
 
-// Direction of a message relative to this gateway.
+// Direction of a message relative to this adapter.
 const (
 	Out = "out" // our system → NHCX
 	In  = "in"  // NHCX → our system

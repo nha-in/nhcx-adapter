@@ -2,7 +2,7 @@
   "env": "sandbox",
   "listen": "127.0.0.1:8090",
   "publicUrl": "",
-  "apiKey": "${NHCX_GATEWAY_API_KEY}",
+  "apiKey": "${NHCX_ADAPTER_API_KEY}",
   "participant": {
     "participantId": "1000003463@hcx",
     "name": "",

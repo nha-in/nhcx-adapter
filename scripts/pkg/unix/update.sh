@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Upgrade or downgrade nhcx-gateway from the GitHub releases.
+# Upgrade or downgrade nhcx-adapter from the GitHub releases.
 #   ./update.sh              pick a version from a menu
 #   ./update.sh --latest -y  newest release, no questions
 #   ./update.sh --to v1.2.0  a specific version (older = downgrade)
@@ -7,9 +7,9 @@
 #   ./update.sh --check      exit code 1 when a newer release exists
 cd "$(dirname "$0")" || exit 1
 
-./nhcx-gateway update "$@" || exit $?
+./nhcx-adapter update "$@" || exit $?
 
-PIDFILE=nhcx-gateway.pid
+PIDFILE=nhcx-adapter.pid
 if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
   echo
   echo "The running server (PID $(cat "$PIDFILE")) still uses the previous version."

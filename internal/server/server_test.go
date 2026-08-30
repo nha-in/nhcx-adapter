@@ -17,17 +17,17 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/gateway"
-	"nhcx-gateway/internal/nhcx"
-	"nhcx-gateway/internal/probe"
+	"nhcx-adapter/internal/adapter"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/nhcx"
+	"nhcx-adapter/internal/probe"
 )
 
 // fixture stands up a fake ABDM (sessions + registry + exchange), a fake
-// integrator callback, and the gateway under test wired to both.
+// integrator callback, and the adapter under test wired to both.
 type fixture struct {
 	t         *testing.T
-	self      *rsa.PrivateKey // the gateway's key
+	self      *rsa.PrivateKey // the adapter's key
 	payer     *rsa.PrivateKey // the counterparty's key
 	abdm      *httptest.Server
 	callback  *httptest.Server
@@ -129,7 +129,7 @@ func newFixture(t *testing.T, apiKey string) *fixture {
 	}))
 	t.Cleanup(f.callback.Close)
 
-	// requireApiKey: the fixture is a sandbox gateway, where the key is
+	// requireApiKey: the fixture is a sandbox adapter, where the key is
 	// accepted but not demanded by default. The tests that check enforcement
 	// need it demanded, so they ask for it explicitly.
 	cfgJSON := fmt.Sprintf(`{
@@ -149,7 +149,7 @@ func newFixture(t *testing.T, apiKey string) *fixture {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	gw, err := gateway.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gw, err := adapter.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +616,7 @@ func TestLedger(t *testing.T) {
 	resp.Body.Close()
 }
 
-// A sandbox gateway accepts the API key but does not demand it: the clients
+// A sandbox adapter accepts the API key but does not demand it: the clients
 // written for hcxkit authenticate none of these routes, and 401ing them all
 // buys no security anybody asked for. Production is the opposite, and
 // requireApiKey overrides either way.
@@ -640,9 +640,9 @@ func TestSandboxDoesNotDemandTheAPIKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.APIKeyRequired() {
-		t.Fatal("a sandbox gateway should not demand the API key by default")
+		t.Fatal("a sandbox adapter should not demand the API key by default")
 	}
-	gw, err := gateway.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gw, err := adapter.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -668,7 +668,7 @@ func TestSandboxDoesNotDemandTheAPIKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !prod.APIKeyRequired() {
-		t.Error("a production gateway must demand the API key")
+		t.Error("a production adapter must demand the API key")
 	}
 }
 

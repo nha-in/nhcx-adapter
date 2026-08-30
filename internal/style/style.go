@@ -27,7 +27,7 @@ var (
 	in  = r.NewStyle().Foreground(lipgloss.Color("4")).Bold(true)
 )
 
-// Out renders a message leaving this gateway (magenta).
+// Out renders a message leaving this adapter (magenta).
 func Out(s string) string { return out.Render(s) }
 
 // In renders a message arriving at it (blue).

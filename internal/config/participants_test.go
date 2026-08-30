@@ -23,7 +23,7 @@ func testRSAKey(t *testing.T) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
 }
 
-// A gateway meant to replace hcxkit has to read a kit-shaped participants
+// An adapter meant to replace hcxkit has to read a kit-shaped participants
 // array: {participantId, name, callbackUrl} and nothing else. Everything the
 // entry leaves out comes from the default profile.
 func TestHostedParticipantInheritsAndAcceptsKitSpelling(t *testing.T) {

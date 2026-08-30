@@ -1,5 +1,5 @@
-// Package banner prints the solid block-letter "NHCX GATEWAY" shown when
-// the gateway starts serving. The font is defined here, so the binary
+// Package banner prints the solid block-letter "NHCX ADAPTER" shown when
+// the adapter starts serving. The font is defined here, so the binary
 // stays self-contained.
 package banner
 
@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"nhcx-gateway/internal/style"
+	"nhcx-adapter/internal/style"
 )
 
 // Each glyph is five rows with two-cell-thick strokes, so the letters read
@@ -19,6 +19,9 @@ var glyphs = map[rune][]string{
 	'X': {"##..##", ".####.", "..##..", ".####.", "##..##"},
 	'G': {".#####", "##....", "##.###", "##..##", ".#####"},
 	'A': {".####.", "##..##", "######", "##..##", "##..##"},
+	'D': {"#####.", "##..##", "##..##", "##..##", "#####."},
+	'P': {"#####.", "##..##", "#####.", "##....", "##...."},
+	'R': {"#####.", "##..##", "#####.", "##.##.", "##..##"},
 	'T': {"######", "..##..", "..##..", "..##..", "..##.."},
 	'E': {"######", "##....", "#####.", "##....", "######"},
 	'W': {"##...##", "##...##", "##.#.##", "#######", "##...##"},
@@ -48,10 +51,10 @@ func Render(text string) string {
 	return b.String()
 }
 
-// Serve is the banner printed by "nhcx-gateway serve": the name, then a
+// Serve is the banner printed by "nhcx-adapter serve": the name, then a
 // line with the version, environment, participant and listen address.
 func Serve(version, env, participant, listen string) string {
-	return "\n" + Render("NHCX GATEWAY") + "\n  " +
+	return "\n" + Render("NHCX ADAPTER") + "\n  " +
 		style.Dim(version) + style.Dim(" · ") + style.Key(env) + style.Dim(" · ") + style.Key(participant) +
 		style.Dim(" · listening on ") + style.Key(listen) + fmt.Sprintln() + "\n"
 }

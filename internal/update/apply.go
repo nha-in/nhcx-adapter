@@ -144,7 +144,7 @@ func VerifySum(sums []byte, name string, data []byte) error {
 	return fmt.Errorf("%s: not listed in SHA256SUMS", name)
 }
 
-// Extract pulls the nhcx-gateway binary out of a release archive (.tar.gz
+// Extract pulls the nhcx-adapter binary out of a release archive (.tar.gz
 // or .zip, decided by name).
 func Extract(name string, archive []byte) ([]byte, error) {
 	want := Name

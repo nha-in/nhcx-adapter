@@ -1,6 +1,6 @@
 # build output
-nhcx-gateway
-nhcx-gateway.exe
+nhcx-adapter
+nhcx-adapter.exe
 dist/
 
 # local config and key material — never commit these

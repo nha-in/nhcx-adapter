@@ -1,4 +1,4 @@
-// Package tui is the arrow-key configurator behind "nhcx-gateway config
+// Package tui is the arrow-key configurator behind "nhcx-adapter config
 // edit". It edits the JSON file itself — never the expanded config — so
 // ${ENV} references and @file pointers are written back exactly as typed.
 package tui
@@ -18,7 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"nhcx-gateway/internal/config"
+	"nhcx-adapter/internal/config"
 )
 
 type kind int
@@ -60,7 +60,7 @@ var sections = []section{
 		{path: "env", label: "Environment", kind: kEnum, options: []string{"sandbox", "production"},
 			help: "Which NHCX deployment to talk to. Picks the gateway, registry, session endpoint and X-CM-ID."},
 		{path: "listen", label: "Listen address", kind: kText, help: "host:port for the HTTP listener, e.g. 127.0.0.1:8090 or 0.0.0.0:8090."},
-		{path: "publicUrl", label: "Public URL", kind: kText, help: "How NHCX reaches this gateway from outside, e.g. https://hcx.example.com/in — proposed as the registry endpoint_url."},
+		{path: "publicUrl", label: "Public URL", kind: kText, help: "How NHCX reaches this adapter from outside, e.g. https://hcx.example.com/in — proposed as the registry endpoint_url."},
 		{path: "apiKey", label: "API key (/out)", kind: kSecret,
 			help: "Bearer key your system must send on /out. Required in production. ${VAR} reads it from the environment."},
 		{path: "log.level", label: "Log level", kind: kEnum, options: []string{"info", "debug", "warn", "error"}},
@@ -72,7 +72,7 @@ var sections = []section{
 		{path: "participant.clientId", label: "Client ID", kind: kText, help: "ABDM client id from onboarding. ${VAR} reads it from the environment."},
 		{path: "participant.clientSecret", label: "Client secret", kind: kSecret, help: "ABDM client secret. Prefer ${NHCX_CLIENT_SECRET} over a literal."},
 		{path: "participant.privateKey", label: "Private key", kind: kText,
-			help: "PEM, base64 PEM, or @file relative to this config. Create one with: nhcx-gateway cert generate"},
+			help: "PEM, base64 PEM, or @file relative to this config. Create one with: nhcx-adapter cert generate"},
 	}},
 	{"Callback (NHCX → your system)", []field{
 		{path: "callback.url", label: "Callback URL", kind: kText, help: "Where decrypted messages are POSTed. The NHCX path is appended when 'Append path' is on."},
@@ -93,13 +93,13 @@ var sections = []section{
 		{path: "auth.tokenTtlSeconds", label: "Token TTL (s)", kind: kInt, help: "Assumed lifetime when the token response has no expiry. Default 1200."},
 		{path: "certs.cacheHours", label: "Cert cache (h)", kind: kInt, help: "How long a counterparty certificate is cached. Default 24."},
 	}},
-	{"Certificate (nhcx-gateway cert generate)", []field{
+	{"Certificate (nhcx-adapter cert generate)", []field{
 		{path: "certificate.validityDays", label: "Validity (days)", kind: kInt, help: "Lifetime of a generated certificate. Default 365, at most 3650. The subject is always your participant id."},
 		{path: "certificate.privateKeyFile", label: "Private key file", kind: kText, help: "Written relative to this config. Default private_key.pem."},
 		{path: "certificate.certificateFile", label: "Certificate file", kind: kText, help: "The encryption_cert you register. Default certificate.pem."},
 	}},
 	{"Ledger (FHIR traffic record)", []field{
-		{path: "ledger.enabled", label: "Enabled", kind: kBool, help: "Record every outbound and inbound message with headers, bundle and outcome; browse with /ledger or `nhcx-gateway ledger`."},
+		{path: "ledger.enabled", label: "Enabled", kind: kBool, help: "Record every outbound and inbound message with headers, bundle and outcome; browse with /ledger or `nhcx-adapter ledger`."},
 		{path: "ledger.dir", label: "Directory", kind: kText, help: "Relative to this config. Default data/ledger."},
 		{path: "ledger.retentionDays", label: "Retention (days)", kind: kInt, help: "Older day folders are pruned hourly. 0 keeps everything."},
 		{path: "ledger.storeBodies", label: "Store bundles", kind: kBool, help: "Off keeps only headers and outcomes — no PHI on disk."},
@@ -494,7 +494,7 @@ func (m *Model) validate() {
 	}
 	var errs []error
 	if err := cfg.ResolveFiles(); err != nil {
-		errs = append(errs, fmt.Errorf("%w — create one with: nhcx-gateway cert generate", err))
+		errs = append(errs, fmt.Errorf("%w — create one with: nhcx-adapter cert generate", err))
 		cfg.Participant.PrivateKey = "" // report the missing file once, not twice
 	}
 	if err := cfg.Validate(); err != nil {
@@ -620,7 +620,7 @@ var (
 // View implements tea.Model.
 func (m *Model) View() string {
 	var b strings.Builder
-	title := " nhcx-gateway · " + m.path
+	title := " nhcx-adapter · " + m.path
 	if m.dirty {
 		title += "  [modified]"
 	}

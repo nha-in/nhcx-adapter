@@ -63,11 +63,11 @@ func TestCompare(t *testing.T) {
 func TestVerifySum(t *testing.T) {
 	data := []byte("hello")
 	sum := sha256.Sum256(data)
-	sums := []byte(fmt.Sprintf("%s  other.tar.gz\n%s  nhcx-gateway_v1.0.0_linux_amd64.tar.gz\n", strings.Repeat("0", 64), hex.EncodeToString(sum[:])))
-	if err := VerifySum(sums, "nhcx-gateway_v1.0.0_linux_amd64.tar.gz", data); err != nil {
+	sums := []byte(fmt.Sprintf("%s  other.tar.gz\n%s  nhcx-adapter_v1.0.0_linux_amd64.tar.gz\n", strings.Repeat("0", 64), hex.EncodeToString(sum[:])))
+	if err := VerifySum(sums, "nhcx-adapter_v1.0.0_linux_amd64.tar.gz", data); err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifySum(sums, "nhcx-gateway_v1.0.0_linux_amd64.tar.gz", []byte("tampered")); err == nil {
+	if err := VerifySum(sums, "nhcx-adapter_v1.0.0_linux_amd64.tar.gz", []byte("tampered")); err == nil {
 		t.Fatal("tampered data passed")
 	}
 	if err := VerifySum(sums, "missing.zip", data); err == nil {
@@ -108,11 +108,11 @@ func zipArchive(t *testing.T, dir, name string, content []byte) []byte {
 
 func TestExtract(t *testing.T) {
 	bin := []byte("#!/bin/sh\necho binary\n")
-	got, err := Extract("nhcx-gateway_v1.0.0_linux_amd64.tar.gz", tarGz(t, "nhcx-gateway_v1.0.0_linux_amd64", "nhcx-gateway", bin))
+	got, err := Extract("nhcx-adapter_v1.0.0_linux_amd64.tar.gz", tarGz(t, "nhcx-adapter_v1.0.0_linux_amd64", "nhcx-adapter", bin))
 	if err != nil || !bytes.Equal(got, bin) {
 		t.Fatalf("tar: %v %q", err, got)
 	}
-	got, err = Extract("nhcx-gateway_v1.0.0_windows_amd64.zip", zipArchive(t, "nhcx-gateway_v1.0.0_windows_amd64", "nhcx-gateway.exe", bin))
+	got, err = Extract("nhcx-adapter_v1.0.0_windows_amd64.zip", zipArchive(t, "nhcx-adapter_v1.0.0_windows_amd64", "nhcx-adapter.exe", bin))
 	if err != nil || !bytes.Equal(got, bin) {
 		t.Fatalf("zip: %v %q", err, got)
 	}
@@ -123,7 +123,7 @@ func TestExtract(t *testing.T) {
 
 func TestInstall(t *testing.T) {
 	dir := t.TempDir()
-	exe := filepath.Join(dir, "nhcx-gateway")
+	exe := filepath.Join(dir, "nhcx-adapter")
 	if err := os.WriteFile(exe, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}

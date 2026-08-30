@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"nhcx-gateway/internal/config"
+	"nhcx-adapter/internal/config"
 )
 
 func newClient(t *testing.T, mode, sessionsURL string) *Client {

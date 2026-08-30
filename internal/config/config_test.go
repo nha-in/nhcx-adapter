@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"nhcx-gateway/internal/keys"
+	"nhcx-adapter/internal/keys"
 )
 
 var testKey = func() string {
@@ -153,7 +153,7 @@ func TestErrors(t *testing.T) {
 	}
 	t.Setenv("NHCX_CLIENT_ID", "a")
 	t.Setenv("NHCX_CLIENT_SECRET", "b")
-	t.Setenv("NHCX_GATEWAY_API_KEY", "c")
+	t.Setenv("NHCX_ADAPTER_API_KEY", "c")
 	if _, err := Parse(sample); err != nil {
 		t.Errorf("config.sample.json must parse: %v", err)
 	}

@@ -1,5 +1,5 @@
 // Package logfmt renders slog records for people: one coloured line per
-// message crossing the gateway, compact lines for everything else. The JSON
+// message crossing the adapter, compact lines for everything else. The JSON
 // handler stays the choice for log collectors; this one is for terminals.
 package logfmt
 
@@ -14,7 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"nhcx-gateway/internal/style"
+	"nhcx-adapter/internal/style"
 )
 
 // Handler is a slog.Handler producing readable, coloured lines.
@@ -88,7 +88,7 @@ func (h *Handler) Handle(_ context.Context, r slog.Record) error {
 
 func stamp(t time.Time) string { return style.Dim(t.Format("15:04:05.000")) }
 
-// Column widths for the traffic lines. Every message crossing the gateway
+// Column widths for the traffic lines. Every message crossing the adapter
 // prints the same fields in the same places, so a screenful can be read down
 // a column — "which of these failed", "which took a second" — instead of
 // being parsed line by line. A field wider than its column pushes that one

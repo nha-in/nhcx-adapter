@@ -36,7 +36,7 @@ jobs:
       - run: make release
       - uses: actions/upload-artifact@v4
         with:
-          name: nhcx-gateway-${{ github.ref_name }}
+          name: nhcx-adapter-${{ github.ref_name }}
           path: |
             dist/*.tar.gz
             dist/*.zip
@@ -54,20 +54,20 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: nhcx-gateway-${{ github.ref_name }}
+          name: nhcx-adapter-${{ github.ref_name }}
           path: dist
       - name: Release body
         run: |
           {
-            echo "## nhcx-gateway ${GITHUB_REF_NAME}"
+            echo "## nhcx-adapter ${GITHUB_REF_NAME}"
             echo
-            echo "Stateless NHCX adapter — one binary, one config. Pick your platform, unpack, run \`./nhcx-gateway config edit\` then \`./nhcx-gateway serve\` (or \`serve-hidden\` / \`stop\` / \`update\` scripts from the archive). Already installed? \`nhcx-gateway update --to ${GITHUB_REF_NAME}\`."
+            echo "Stateless NHCX adapter — one binary, one config. Pick your platform, unpack, run \`./nhcx-adapter config edit\` then \`./nhcx-adapter serve\` (or \`serve-hidden\` / \`stop\` / \`update\` scripts from the archive). Already installed? \`nhcx-adapter update --to ${GITHUB_REF_NAME}\`."
             echo
             echo "| Platform | Archive |"
             echo "| --- | --- |"
             for f in dist/*.tar.gz dist/*.zip; do
               base="$(basename "$f")"
-              rest="${base#nhcx-gateway_${GITHUB_REF_NAME}_}"
+              rest="${base#nhcx-adapter_${GITHUB_REF_NAME}_}"
               os="${rest%%_*}"; arch="${rest#*_}"; arch="${arch%%.*}"
               case "$os" in
                 linux)   os="Linux" ;;
@@ -89,7 +89,7 @@ jobs:
           cat body.md
       - uses: softprops/action-gh-release@v2
         with:
-          name: nhcx-gateway ${{ github.ref_name }}
+          name: nhcx-adapter ${{ github.ref_name }}
           body_path: body.md
           generate_release_notes: true
           files: |

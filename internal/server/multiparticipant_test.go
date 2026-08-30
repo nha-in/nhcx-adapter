@@ -13,12 +13,12 @@ import (
 	"sync"
 	"testing"
 
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/gateway"
-	"nhcx-gateway/internal/nhcx"
+	"nhcx-adapter/internal/adapter"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/nhcx"
 )
 
-// A gateway hosting two identities has to get two things right that a
+// An adapter hosting two identities has to get two things right that a
 // single-participant one never faced: an inbound message must reach the
 // callback of the participant it is addressed to, and an outbound one must go
 // out as the participant that sent it. These tests pin both.
@@ -30,7 +30,7 @@ type hosted struct {
 	payer    *rsa.PrivateKey // the counterparty
 	abdm     *httptest.Server
 	srv      *httptest.Server
-	gw       *gateway.Gateway
+	gw       *adapter.Adapter
 	sessions map[string]int // clientId -> sessions issued
 
 	mu       sync.Mutex
@@ -92,7 +92,7 @@ func newHosted(t *testing.T, tenantKeyOfItsOwn bool, tenantCreds bool) *hosted {
 	t.Cleanup(h.abdm.Close)
 
 	// One server, two mount points: whichever path is hit tells us which
-	// participant's callback the gateway chose.
+	// participant's callback the adapter chose.
 	cb := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := "default"
 		if strings.HasPrefix(r.URL.Path, "/tenant") {
@@ -137,7 +137,7 @@ func newHosted(t *testing.T, tenantKeyOfItsOwn bool, tenantCreds bool) *hosted {
 	if err := cfg.ValidateServe(); err != nil {
 		t.Fatal(err)
 	}
-	gw, err := gateway.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gw, err := adapter.New(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestInboundDecryptsWithTheHostedParticipantsOwnKey(t *testing.T) {
 	}
 }
 
-// A code this gateway does not hold is still refused, and the error names
+// A code this adapter does not hold is still refused, and the error names
 // every code it does hold rather than only the default.
 func TestInboundRefusesACodeNoParticipantHolds(t *testing.T) {
 	h := newHosted(t, false, false)

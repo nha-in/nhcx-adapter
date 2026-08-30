@@ -1,9 +1,9 @@
-// Package abdm is the gateway's client for the ABDM side of NHCX: session
+// Package abdm is the adapter's client for the ABDM side of NHCX: session
 // tokens, the participant registry (recipient certificates) and the exchange
 // gateway itself. Everything is synchronous and in-memory, with no
 // persistence.
 //
-// A gateway that hosts several participants gets one Client per profile, all
+// An adapter that hosts several participants gets one Client per profile, all
 // sharing a Pool. What they share is deliberate: certificates describe a
 // counterparty, not us, so one cache serves every profile; session tokens are
 // issued per credential, so they are keyed by clientId and profiles that
@@ -28,10 +28,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/keys"
-	"nhcx-gateway/internal/nhcx"
-	"nhcx-gateway/internal/participant"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/keys"
+	"nhcx-adapter/internal/nhcx"
+	"nhcx-adapter/internal/participant"
 )
 
 // Error is a typed failure with a stable code the HTTP surface and the CLI
@@ -91,7 +91,7 @@ type certEntry struct {
 	expires time.Time
 }
 
-// NewPool builds the shared state for a gateway's clients.
+// NewPool builds the shared state for an adapter's clients.
 func NewPool(cfg *config.Config, locals *participant.Set, logger *slog.Logger) *Pool {
 	if logger == nil {
 		logger = slog.Default()
@@ -317,14 +317,14 @@ func (c *Client) FetchCertificate(ctx context.Context, code string) (*rsa.Public
 	}
 	// The registry has handed back one of our own keys for somebody else.
 	// Whether that is fatal depends on where we are — see
-	// config.RefusesSelfKey. It is never fatal for a participant this gateway
+	// config.RefusesSelfKey. It is never fatal for a participant this adapter
 	// hosts itself (a loopback test, or one hosted participant writing to
 	// another): there the local key is genuinely the recipient's key.
 	if c.locals().OwnsKey(pub) && !c.locals().IsLocal(code) {
 		if c.cfg().RefusesSelfKey() {
-			return nil, "", &Error{Code: "SELF_ENCRYPTION_KEY", Message: "registry certificate for " + code + " is this gateway's own key; a payload encrypted with it would be unreadable at the far end"}
+			return nil, "", &Error{Code: "SELF_ENCRYPTION_KEY", Message: "registry certificate for " + code + " is this adapter's own key; a payload encrypted with it would be unreadable at the far end"}
 		}
-		c.log().Warn("registry certificate is this gateway's own key",
+		c.log().Warn("registry certificate is this adapter's own key",
 			"participant", code,
 			"note", "expected in a sandbox where participants share one certificate; "+
 				"in production this would be unreadable at the far end")
@@ -338,7 +338,7 @@ func (c *Client) FetchCertificate(ctx context.Context, code string) (*rsa.Public
 
 // PostRegistry sends a JSON body to a path on the participant registry with
 // this participant's session token, and hands back the status and raw body.
-// It exists for the registry calls the gateway does not model itself — the
+// It exists for the registry calls the adapter does not model itself — the
 // policy search a kit client asks for — so they go out with the same token
 // handling, refresh-on-401 and timeouts as everything else.
 func (c *Client) PostRegistry(ctx context.Context, path string, body any) (int, []byte, error) {
@@ -346,7 +346,7 @@ func (c *Client) PostRegistry(ctx context.Context, path string, body any) (int, 
 	return c.postWithToken(ctx, endpoint, body, false)
 }
 
-// Participant is a registry record, as far as the gateway cares.
+// Participant is a registry record, as far as the adapter cares.
 type Participant struct {
 	Code        string
 	Name        string

@@ -1,17 +1,17 @@
-// nhcx-gateway is a minimal, stateless NHCX adapter: it encrypts and sends
+// nhcx-adapter is a minimal, stateless NHCX adapter: it encrypts and sends
 // FHIR bundles to the exchange, decrypts and delivers what the exchange
 // sends back, and fetches recipient certificates on demand. Nothing else.
 //
-//	nhcx-gateway serve   [--config config.json]
-//	nhcx-gateway send    [--config config.json] --path v1/preauth/submit --recipient CODE [--file bundle.json]
-//	nhcx-gateway cert    [--config config.json] CODE [--refresh]
-//	nhcx-gateway cert generate [--config config.json] [--force]
-//	nhcx-gateway token   [--config config.json]
-//	nhcx-gateway decrypt [--config config.json] [--file jwe.txt]
-//	nhcx-gateway config init [path]
-//	nhcx-gateway config edit [path]
-//	nhcx-gateway update  [--list | --check | --latest | --to TAG] [-y]
-//	nhcx-gateway version
+//	nhcx-adapter serve   [--config config.json]
+//	nhcx-adapter send    [--config config.json] --path v1/preauth/submit --recipient CODE [--file bundle.json]
+//	nhcx-adapter cert    [--config config.json] CODE [--refresh]
+//	nhcx-adapter cert generate [--config config.json] [--force]
+//	nhcx-adapter token   [--config config.json]
+//	nhcx-adapter decrypt [--config config.json] [--file jwe.txt]
+//	nhcx-adapter config init [path]
+//	nhcx-adapter config edit [path]
+//	nhcx-adapter update  [--list | --check | --latest | --to TAG] [-y]
+//	nhcx-adapter version
 package main
 
 import (
@@ -35,20 +35,20 @@ import (
 	"syscall"
 	"time"
 
-	"nhcx-gateway/internal/abdm"
-	"nhcx-gateway/internal/banner"
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/gateway"
-	"nhcx-gateway/internal/keys"
-	"nhcx-gateway/internal/ledger"
-	"nhcx-gateway/internal/logfmt"
-	"nhcx-gateway/internal/nhcx"
-	"nhcx-gateway/internal/preflight"
-	"nhcx-gateway/internal/probe"
-	"nhcx-gateway/internal/server"
-	"nhcx-gateway/internal/style"
-	"nhcx-gateway/internal/tui"
-	"nhcx-gateway/internal/update"
+	"nhcx-adapter/internal/abdm"
+	"nhcx-adapter/internal/adapter"
+	"nhcx-adapter/internal/banner"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/keys"
+	"nhcx-adapter/internal/ledger"
+	"nhcx-adapter/internal/logfmt"
+	"nhcx-adapter/internal/nhcx"
+	"nhcx-adapter/internal/preflight"
+	"nhcx-adapter/internal/probe"
+	"nhcx-adapter/internal/server"
+	"nhcx-adapter/internal/style"
+	"nhcx-adapter/internal/tui"
+	"nhcx-adapter/internal/update"
 )
 
 //go:embed config.sample.json
@@ -61,30 +61,30 @@ var (
 	builtAt = "unknown"
 )
 
-const usage = `nhcx-gateway — stateless NHCX adapter (sandbox and production)
+const usage = `nhcx-adapter — stateless NHCX adapter (sandbox and production)
 
 Usage:
-  nhcx-gateway serve    [--config FILE] [--no-tui] [--skip-checks] [--no-banner] [--no-update-check]
+  nhcx-adapter serve    [--config FILE] [--no-tui] [--skip-checks] [--no-banner] [--no-update-check]
                                                                  run the HTTP adapter (checks the setup first)
-  nhcx-gateway check    [--config FILE] [--no-tui] [--endpoint URL] run the setup checks, offer fixes, and exit
-  nhcx-gateway send     [--config FILE] --path P --recipient C   send one bundle (from --file or stdin)
+  nhcx-adapter check    [--config FILE] [--no-tui] [--endpoint URL] run the setup checks, offer fixes, and exit
+  nhcx-adapter send     [--config FILE] --path P --recipient C   send one bundle (from --file or stdin)
                         [--sender C] [--correlation-id ID] [--workflow-id ID] [--status S]
-  nhcx-gateway cert     [--config FILE] CODE [--refresh]          print a participant's encryption certificate
-  nhcx-gateway cert generate [--config FILE] [--days N] [--force] generate this participant's key + certificate
-  nhcx-gateway token    [--config FILE]                          print a fresh session token
-  nhcx-gateway decrypt  [--config FILE] [--file FILE]            decrypt a compact JWE (from --file or stdin)
-  nhcx-gateway config init [FILE]                                write a sample config (default: config.json)
-  nhcx-gateway config edit [FILE]                                edit a config with an arrow-key form (creates it if missing)
-  nhcx-gateway ledger list   [--direction out|in] [--entity E] [--status S] [--correlation-id ID]
+  nhcx-adapter cert     [--config FILE] CODE [--refresh]          print a participant's encryption certificate
+  nhcx-adapter cert generate [--config FILE] [--days N] [--force] generate this participant's key + certificate
+  nhcx-adapter token    [--config FILE]                          print a fresh session token
+  nhcx-adapter decrypt  [--config FILE] [--file FILE]            decrypt a compact JWE (from --file or stdin)
+  nhcx-adapter config init [FILE]                                write a sample config (default: config.json)
+  nhcx-adapter config edit [FILE]                                edit a config with an arrow-key form (creates it if missing)
+  nhcx-adapter ledger list   [--direction out|in] [--entity E] [--status S] [--correlation-id ID]
                              [--participant CODE] [--since 24h] [--limit N] [--json]
-  nhcx-gateway ledger show   ID [--json]                        one message in full, bundle included
-  nhcx-gateway ledger thread CORRELATION_ID [--json]            an exchange and where it stands
-  nhcx-gateway ledger stats  [--json]
-  nhcx-gateway update   [--list] [--check] [--latest] [--to TAG] [-y] [--prerelease]
+  nhcx-adapter ledger show   ID [--json]                        one message in full, bundle included
+  nhcx-adapter ledger thread CORRELATION_ID [--json]            an exchange and where it stands
+  nhcx-adapter ledger stats  [--json]
+  nhcx-adapter update   [--list] [--check] [--latest] [--to TAG] [-y] [--prerelease]
                                                                  list the GitHub releases; upgrade or downgrade this binary
-  nhcx-gateway version
+  nhcx-adapter version
 
-The config path defaults to $NHCX_GATEWAY_CONFIG, then ./config.json.
+The config path defaults to $NHCX_ADAPTER_CONFIG, then ./config.json.
 `
 
 func main() {
@@ -114,7 +114,7 @@ func main() {
 	case "update":
 		err = cmdUpdate(os.Args[2:])
 	case "version", "--version", "-v":
-		fmt.Printf("%s %s (%s) built %s\n", style.Brand("nhcx-gateway"), version, commit, builtAt)
+		fmt.Printf("%s %s (%s) built %s\n", style.Brand("nhcx-adapter"), version, commit, builtAt)
 	case "help", "--help", "-h":
 		fmt.Print(usage)
 	default:
@@ -135,7 +135,7 @@ func main() {
 func newFlags(name string) (*flag.FlagSet, *string) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	def := os.Getenv("NHCX_GATEWAY_CONFIG")
+	def := os.Getenv("NHCX_ADAPTER_CONFIG")
 	if def == "" {
 		def = "config.json"
 	}
@@ -143,13 +143,13 @@ func newFlags(name string) (*flag.FlagSet, *string) {
 	return fs, cfgPath
 }
 
-func load(path string) (*config.Config, *gateway.Gateway, *slog.Logger, error) {
+func load(path string) (*config.Config, *adapter.Adapter, *slog.Logger, error) {
 	cfg, err := config.Load(path)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	logger := newLogger(cfg)
-	gw, err := gateway.New(cfg, logger)
+	gw, err := adapter.New(cfg, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -236,8 +236,8 @@ func cmdServe(args []string) error {
 	fs, cfgPath := newFlags("serve")
 	noTUI := fs.Bool("no-tui", false, "never open the configurator or prompts; fail or warn instead")
 	skip := fs.Bool("skip-checks", false, "start without the session / registry / certificate / endpoint checks")
-	noBanner := fs.Bool("no-banner", os.Getenv("NHCX_GATEWAY_NO_BANNER") != "", "do not print the startup banner (also NHCX_GATEWAY_NO_BANNER=1)")
-	noUpdate := fs.Bool("no-update-check", os.Getenv("NHCX_GATEWAY_NO_UPDATE_CHECK") != "", "do not look for a newer release on GitHub at startup (also NHCX_GATEWAY_NO_UPDATE_CHECK=1)")
+	noBanner := fs.Bool("no-banner", os.Getenv("NHCX_ADAPTER_NO_BANNER") != "", "do not print the startup banner (also NHCX_ADAPTER_NO_BANNER=1)")
+	noUpdate := fs.Bool("no-update-check", os.Getenv("NHCX_ADAPTER_NO_UPDATE_CHECK") != "", "do not look for a newer release on GitHub at startup (also NHCX_ADAPTER_NO_UPDATE_CHECK=1)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -252,7 +252,7 @@ func cmdServe(args []string) error {
 	if !*noBanner {
 		fmt.Fprint(os.Stderr, banner.Serve(version, cfg.Env, cfg.Participant.ParticipantID, cfg.Listen))
 	}
-	logger.Info("nhcx-gateway starting", "version", version, "callback", gw.DeliveryURL("", ""), "nhcx", cfg.URLs.NHCX,
+	logger.Info("nhcx-adapter starting", "version", version, "callback", gw.DeliveryURL("", ""), "nhcx", cfg.URLs.NHCX,
 		"participants", gw.Profiles().Len())
 	// With more than one identity, say which callback each one's traffic goes
 	// to — the single "callback" field above is only the default's.
@@ -289,12 +289,12 @@ func cmdServe(args []string) error {
 	return <-errCh
 }
 
-// withListener runs fn with this gateway listening on cfg.Listen. If the
+// withListener runs fn with this adapter listening on cfg.Listen. If the
 // port is already taken, an instance is assumed to be running there and fn
 // runs against it. Either way the local listener is confirmed with a
 // /healthz call first, so a failing public URL is never mistaken for a
-// gateway that is not up.
-func withListener(ctx context.Context, gw *gateway.Gateway, logger *slog.Logger, fn func() error) error {
+// adapter that is not up.
+func withListener(ctx context.Context, gw *adapter.Adapter, logger *slog.Logger, fn func() error) error {
 	cfg := gw.Config()
 	local := "http://" + strings.Replace(cfg.Listen, "0.0.0.0:", "127.0.0.1:", 1) + "/healthz"
 	if strings.HasPrefix(cfg.Listen, ":") {
@@ -345,10 +345,10 @@ func withListener(ctx context.Context, gw *gateway.Gateway, logger *slog.Logger,
 	return err
 }
 
-// verifyEndpoint tests the registry's endpoint_url against this gateway and,
+// verifyEndpoint tests the registry's endpoint_url against this adapter and,
 // interactively, offers to re-register it. It returns an error only when
 // the operator chooses to quit.
-func verifyEndpoint(ctx context.Context, cfg *config.Config, gw *gateway.Gateway, rep *preflight.Report, logger *slog.Logger, interactive bool) error {
+func verifyEndpoint(ctx context.Context, cfg *config.Config, gw *adapter.Adapter, rep *preflight.Report, logger *slog.Logger, interactive bool) error {
 	registered := rep.Participant.EndpointURL
 	for {
 		tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -360,8 +360,8 @@ func verifyEndpoint(ctx context.Context, cfg *config.Config, gw *gateway.Gateway
 		}
 		logger.Warn("registered endpoint check failed", "detail", c.Detail)
 		if !interactive {
-			logger.Warn("NHCX cannot deliver callbacks until endpoint_url reaches this gateway",
-				"hint", "set publicUrl and run `nhcx-gateway check` in a terminal, or update endpoint_url on the registry to https://<public-host>/in")
+			logger.Warn("NHCX cannot deliver callbacks until endpoint_url reaches this adapter",
+				"hint", "set publicUrl and run `nhcx-adapter check` in a terminal, or update endpoint_url on the registry to https://<public-host>/in")
 			return nil
 		}
 		next, err := fixEndpoint(ctx, cfg, gw, rep, registered, c)
@@ -375,15 +375,15 @@ func verifyEndpoint(ctx context.Context, cfg *config.Config, gw *gateway.Gateway
 	}
 }
 
-// fixEndpoint offers to point the registry at this gateway. It returns the
+// fixEndpoint offers to point the registry at this adapter. It returns the
 // URL to test next, "" to stop, or an error to quit.
-func fixEndpoint(ctx context.Context, cfg *config.Config, gw *gateway.Gateway, rep *preflight.Report, registered string, c preflight.Check) (string, error) {
+func fixEndpoint(ctx context.Context, cfg *config.Config, gw *adapter.Adapter, rep *preflight.Report, registered string, c preflight.Check) (string, error) {
 	logOut.Mute()
 	defer logOut.Unmute()
 
 	proposed := strings.TrimRight(cfg.PublicURL, "/")
 	body := []string{
-		"NHCX delivers every callback for " + cfg.Participant.ParticipantID + " to the endpoint_url on the participant registry, and that URL does not lead to this gateway:",
+		"NHCX delivers every callback for " + cfg.Participant.ParticipantID + " to the endpoint_url on the participant registry, and that URL does not lead to this adapter:",
 		"  " + c.Detail,
 	}
 	if registered != "" {
@@ -394,12 +394,12 @@ func fixEndpoint(ctx context.Context, cfg *config.Config, gw *gateway.Gateway, r
 		options = append(options, tui.Option{Key: "update", Label: "Update the registry: endpoint_url → " + proposed + "  (publicUrl)"})
 	}
 	options = append(options,
-		tui.Option{Key: "enter", Label: "Enter the URL to register (this gateway's public https://… base)"},
+		tui.Option{Key: "enter", Label: "Enter the URL to register (this adapter's public https://… base)"},
 		tui.Option{Key: "retest", Label: "Test again (after a proxy / DNS / firewall change)"},
 		tui.Option{Key: "continue", Label: "Continue without changing the registry"},
 		tui.Option{Key: "quit", Label: "Quit"},
 	)
-	choice, err := tui.Choose("Registered endpoint does not reach this gateway", body, options)
+	choice, err := tui.Choose("Registered endpoint does not reach this adapter", body, options)
 	if err != nil {
 		if errors.Is(err, tui.ErrCancelled) {
 			return "", nil
@@ -419,8 +419,8 @@ func fixEndpoint(ctx context.Context, cfg *config.Config, gw *gateway.Gateway, r
 			initial = registered
 		}
 		proposed, err = tui.Prompt("Endpoint to register", []string{
-			"The public base URL NHCX should POST callbacks to. This gateway answers on the host root and under /in, so https://host/in is the usual value.",
-			"Warning: whatever currently lives at the registered URL (another gateway, hcxkit, …) stops receiving callbacks for this participant.",
+			"The public base URL NHCX should POST callbacks to. This adapter answers on the host root and under /in, so https://host/in is the usual value.",
+			"Warning: whatever currently lives at the registered URL (another adapter, hcxkit, …) stops receiving callbacks for this participant.",
 		}, "endpoint_url", initial, func(v string) error {
 			u, err := url.Parse(v)
 			if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
@@ -460,8 +460,8 @@ func fixEndpoint(ctx context.Context, cfg *config.Config, gw *gateway.Gateway, r
 }
 
 // prepare loads the config and runs the setup checks, looping through the
-// configurator (when interactive) until the gateway can actually serve.
-func prepare(ctx context.Context, path string, interactive, skipChecks bool) (*config.Config, *gateway.Gateway, *slog.Logger, *preflight.Report, error) {
+// configurator (when interactive) until the adapter can actually serve.
+func prepare(ctx context.Context, path string, interactive, skipChecks bool) (*config.Config, *adapter.Adapter, *slog.Logger, *preflight.Report, error) {
 	for attempt := 0; ; attempt++ {
 		cfg, gw, logger, err := loadForServe(path)
 		if err != nil {
@@ -497,7 +497,7 @@ func prepare(ctx context.Context, path string, interactive, skipChecks bool) (*c
 
 		if rep.Cert != preflight.CertMatch {
 			if !interactive {
-				return nil, nil, nil, nil, fmt.Errorf("encryption certificate check: %s — run `nhcx-gateway serve` in a terminal to fix it interactively, or `nhcx-gateway serve --skip-checks` to start anyway", rep.Cert)
+				return nil, nil, nil, nil, fmt.Errorf("encryption certificate check: %s — run `nhcx-adapter serve` in a terminal to fix it interactively, or `nhcx-adapter serve --skip-checks` to start anyway", rep.Cert)
 			}
 			again, err := fixCertificate(ctx, path, cfg, gw, rep)
 			if err != nil {
@@ -512,7 +512,7 @@ func prepare(ctx context.Context, path string, interactive, skipChecks bool) (*c
 }
 
 // loadForServe is load plus the listener-only validation.
-func loadForServe(path string) (*config.Config, *gateway.Gateway, *slog.Logger, error) {
+func loadForServe(path string) (*config.Config, *adapter.Adapter, *slog.Logger, error) {
 	cfg, gw, logger, err := load(path)
 	if err != nil {
 		return nil, nil, nil, err
@@ -547,7 +547,7 @@ func editBecause(path, message string) bool {
 // fixCertificate handles a registry certificate that is missing or does
 // not open with our key. It returns again=true when the setup changed and
 // the checks should run once more.
-func fixCertificate(ctx context.Context, path string, cfg *config.Config, gw *gateway.Gateway, rep *preflight.Report) (again bool, err error) {
+func fixCertificate(ctx context.Context, path string, cfg *config.Config, gw *adapter.Adapter, rep *preflight.Report) (again bool, err error) {
 	var body []string
 	switch rep.Cert {
 	case preflight.CertMismatch:
@@ -647,7 +647,7 @@ func certificateForCurrentKey(cfg *config.Config) (string, error) {
 	return "", fmt.Errorf("no certificate for the current key found (looked for %s); choose 'generate' instead", cfg.Resolve(cfg.Certificate.CertificateFile))
 }
 
-func uploadCertificate(ctx context.Context, gw *gateway.Gateway, rep *preflight.Report, certPEM string) error {
+func uploadCertificate(ctx context.Context, gw *adapter.Adapter, rep *preflight.Report, certPEM string) error {
 	var roles []string
 	if rep.Participant != nil {
 		roles = rep.Participant.Roles
@@ -732,7 +732,7 @@ func cmdCheck(args []string) error {
 			interactive = false // an explicit URL is a probe, not a registration to fix
 		}
 		if rep.Participant != nil {
-			// The public URL can only lead somewhere if this gateway is
+			// The public URL can only lead somewhere if this adapter is
 			// listening, so bring the listener up for the test (or use the
 			// instance already on that port).
 			err := withListener(ctx, gw, logger, func() error {
@@ -792,7 +792,7 @@ func cmdSend(args []string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	res, err := gw.Send(ctx, gateway.OutboundRequest{Path: *path, Headers: headers, FHIR: bundle})
+	res, err := gw.Send(ctx, adapter.OutboundRequest{Path: *path, Headers: headers, FHIR: bundle})
 	if err != nil {
 		return err
 	}
@@ -932,7 +932,7 @@ func cmdToken(args []string) error {
 	client := gw.ABDM()
 	if *as != "" {
 		if gw.Profiles().ByCode(*as) == nil {
-			return fmt.Errorf("no participant %s is configured; this gateway holds %s", *as, strings.Join(gw.Profiles().Codes(), ", "))
+			return fmt.Errorf("no participant %s is configured; this adapter holds %s", *as, strings.Join(gw.Profiles().Codes(), ", "))
 		}
 		client = gw.ABDMFor(*as)
 	}
@@ -980,9 +980,9 @@ func cmdDecrypt(args []string) error {
 
 func cmdConfig(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: nhcx-gateway config init|edit [FILE]")
+		return errors.New("usage: nhcx-adapter config init|edit [FILE]")
 	}
-	path := os.Getenv("NHCX_GATEWAY_CONFIG")
+	path := os.Getenv("NHCX_ADAPTER_CONFIG")
 	if path == "" {
 		path = "config.json"
 	}
@@ -1009,7 +1009,7 @@ func cmdConfig(args []string) error {
 		return nil
 	case "init":
 	default:
-		return errors.New("usage: nhcx-gateway config init|edit [FILE]")
+		return errors.New("usage: nhcx-adapter config init|edit [FILE]")
 	}
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s already exists; not overwriting", path)
@@ -1017,8 +1017,8 @@ func cmdConfig(args []string) error {
 	if err := os.WriteFile(path, []byte(sampleConfig), 0o600); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "%s wrote %s — set NHCX_CLIENT_ID, NHCX_CLIENT_SECRET, NHCX_GATEWAY_API_KEY, then run\n  %s\nto create private_key.pem and the certificate to register.\n",
-		style.Good("✓"), style.Key(path), style.Key("nhcx-gateway cert generate --config "+path))
+	fmt.Fprintf(os.Stderr, "%s wrote %s — set NHCX_CLIENT_ID, NHCX_CLIENT_SECRET, NHCX_ADAPTER_API_KEY, then run\n  %s\nto create private_key.pem and the certificate to register.\n",
+		style.Good("✓"), style.Key(path), style.Key("nhcx-adapter cert generate --config "+path))
 	return nil
 }
 
@@ -1041,7 +1041,7 @@ func openLedger(cfgPath string) (*config.Config, *ledger.Store, error) {
 
 func cmdLedger(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: nhcx-gateway ledger list|show|thread|stats|clear …")
+		return errors.New("usage: nhcx-adapter ledger list|show|thread|stats|clear …")
 	}
 	sub, rest := args[0], args[1:]
 	fs, cfgPath := newFlags("ledger " + sub)
@@ -1141,7 +1141,7 @@ func cmdLedger(args []string) error {
 		return nil
 	case "show":
 		if len(positional) == 0 {
-			return errors.New("usage: nhcx-gateway ledger show ID")
+			return errors.New("usage: nhcx-adapter ledger show ID")
 		}
 		e, err := store.Get(positional[0])
 		if err != nil {
@@ -1154,7 +1154,7 @@ func cmdLedger(args []string) error {
 		return nil
 	case "thread":
 		if len(positional) == 0 {
-			return errors.New("usage: nhcx-gateway ledger thread CORRELATION_ID")
+			return errors.New("usage: nhcx-adapter ledger thread CORRELATION_ID")
 		}
 		t := store.Thread(positional[0], "")
 		if t == nil {
@@ -1302,11 +1302,11 @@ func printLedgerEntry(e *ledger.Entry) {
 // cmdUpdate lists the releases on GitHub and installs the one picked —
 // newer or older — in place of the running binary.
 //
-//	nhcx-gateway update                 interactive: pick a version
-//	nhcx-gateway update --list          print every release and stop
-//	nhcx-gateway update --check         say whether a newer release exists (exit 1 if so)
-//	nhcx-gateway update --latest [-y]   install the newest stable release
-//	nhcx-gateway update --to v1.2.0 [-y] install a specific tag (upgrade or downgrade)
+//	nhcx-adapter update                 interactive: pick a version
+//	nhcx-adapter update --list          print every release and stop
+//	nhcx-adapter update --check         say whether a newer release exists (exit 1 if so)
+//	nhcx-adapter update --latest [-y]   install the newest stable release
+//	nhcx-adapter update --to v1.2.0 [-y] install a specific tag (upgrade or downgrade)
 func cmdUpdate(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -1317,7 +1317,7 @@ func cmdUpdate(args []string) error {
 	yes := fs.Bool("yes", false, "do not ask for confirmation")
 	fs.BoolVar(yes, "y", false, "same as --yes")
 	pre := fs.Bool("prerelease", false, "include pre-releases")
-	repo := fs.String("repo", "", "GitHub repository to consult, owner/name (default "+update.DefaultRepo+", or $NHCX_GATEWAY_UPDATE_REPO)")
+	repo := fs.String("repo", "", "GitHub repository to consult, owner/name (default "+update.DefaultRepo+", or $NHCX_ADAPTER_UPDATE_REPO)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -1362,7 +1362,7 @@ func cmdUpdate(args []string) error {
 	switch {
 	case *to != "":
 		if target = update.Find(releases, *to); target == nil {
-			return fmt.Errorf("no release %s (see `nhcx-gateway update --list`)", *to)
+			return fmt.Errorf("no release %s (see `nhcx-adapter update --list`)", *to)
 		}
 	case *latest:
 		if target = update.Latest(releases, *pre); target == nil {
@@ -1440,7 +1440,7 @@ func cmdUpdate(args []string) error {
 	} else {
 		fmt.Fprintf(os.Stderr, "  %s %s\n", style.Good("✓"), line)
 	}
-	fmt.Fprintln(os.Stderr, style.Dim("restart `nhcx-gateway serve` to run the new version"))
+	fmt.Fprintln(os.Stderr, style.Dim("restart `nhcx-adapter serve` to run the new version"))
 	return nil
 }
 
@@ -1536,7 +1536,7 @@ func pickRelease(releases []update.Release, ch update.Check, platform string) (*
 		opts = append(opts, tui.Option{Key: releases[i].Tag, Label: releaseLine(&releases[i], ch, platform)})
 	}
 	opts = append(opts, tui.Option{Key: "", Label: "cancel"})
-	key, err := tui.Choose("nhcx-gateway update", body, opts)
+	key, err := tui.Choose("nhcx-adapter update", body, opts)
 	if err != nil {
 		if errors.Is(err, tui.ErrCancelled) {
 			return nil, nil
@@ -1566,7 +1566,7 @@ func confirmInstall(r *update.Release, direction, exe string) bool {
 	if !isTerminal() {
 		return true
 	}
-	key, err := tui.Choose("nhcx-gateway update", body, []tui.Option{
+	key, err := tui.Choose("nhcx-adapter update", body, []tui.Option{
 		{Key: "install", Label: direction + " " + r.Tag},
 		{Key: "cancel", Label: "cancel"},
 	})
@@ -1576,7 +1576,7 @@ func confirmInstall(r *update.Release, direction, exe string) bool {
 // notifyUpdate logs one line when a newer release exists. It never blocks
 // the server: it runs in the background and gives up quietly on any error.
 func notifyUpdate(ctx context.Context, logger *slog.Logger) {
-	if os.Getenv("NHCX_GATEWAY_NO_UPDATE_CHECK") != "" {
+	if os.Getenv("NHCX_ADAPTER_NO_UPDATE_CHECK") != "" {
 		return
 	}
 	if _, ok := update.Parse(version); !ok {
@@ -1592,7 +1592,7 @@ func notifyUpdate(ctx context.Context, logger *slog.Logger) {
 			return
 		}
 		if ch := update.CompareCurrent(version, releases); ch.Available {
-			logger.Warn("update available", "installed", version, "latest", ch.Latest.Tag, "run", "nhcx-gateway update")
+			logger.Warn("update available", "installed", version, "latest", ch.Latest.Tag, "run", "nhcx-adapter update")
 		}
 	}()
 }

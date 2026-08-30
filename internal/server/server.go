@@ -1,4 +1,4 @@
-// Package server is the HTTP surface of nhcx-gateway:
+// Package server is the HTTP surface of nhcx-adapter:
 //
 //	POST /out/{nhcx-path}   integrator → NHCX  (encrypt + dispatch, sync)
 //	POST /in/{nhcx-path}    NHCX → integrator  (decrypt + deliver, sync)
@@ -7,7 +7,7 @@
 //	GET  /ledger/stats      counts (API key)
 //	GET  /ledger/thread/{correlation_id}   one exchange with its derived state (API key)
 //	GET  /ledger/{id}       one message in full, bundle included (API key)
-//	GET  /token             the ABDM session token this gateway holds (API key)
+//	GET  /token             the ABDM session token this adapter holds (API key)
 //	POST /token/refresh     discard it and mint a new one (API key)
 //	GET  /healthz           process is up
 //	GET  /readyz            a session token is held
@@ -30,16 +30,16 @@ import (
 
 	"github.com/google/uuid"
 
-	"nhcx-gateway/internal/abdm"
-	"nhcx-gateway/internal/gateway"
-	"nhcx-gateway/internal/ledger"
-	"nhcx-gateway/internal/nhcx"
-	"nhcx-gateway/internal/probe"
+	"nhcx-adapter/internal/abdm"
+	"nhcx-adapter/internal/adapter"
+	"nhcx-adapter/internal/ledger"
+	"nhcx-adapter/internal/nhcx"
+	"nhcx-adapter/internal/probe"
 )
 
-// Server wraps the gateway in an http.Server.
+// Server wraps the adapter in an http.Server.
 type Server struct {
-	gw       *gateway.Gateway
+	gw       *adapter.Adapter
 	log      *slog.Logger
 	version  string
 	http     *http.Server
@@ -47,7 +47,7 @@ type Server struct {
 }
 
 // New builds the server; Run starts it.
-func New(gw *gateway.Gateway, logger *slog.Logger, version string) *Server {
+func New(gw *adapter.Adapter, logger *slog.Logger, version string) *Server {
 	s := &Server{gw: gw, log: logger, version: version, probeKey: probe.Key(gw.Config())}
 	s.http = &http.Server{
 		Addr:              gw.Config().Listen,
@@ -73,7 +73,7 @@ func (s *Server) Handler() http.Handler {
 	// hcxkit publishes the same thing under /fhir/out, and the apps written
 	// against the kit send there. Same handler, same body — only the prefix
 	// differs, so accepting both means a backend can be pointed at either
-	// gateway without a code change.
+	// adapter without a code change.
 	mux.HandleFunc("POST /fhir/out/{path...}", s.requireAPIKey(s.outbound))
 	// The sliver of hcxkit's /internal console API a kit client needs before
 	// it can send at all — see kitcompat.go.
@@ -294,9 +294,9 @@ func (s *Server) ledgerStats(w http.ResponseWriter, r *http.Request) {
 
 // healthz is the liveness probe. A POST carrying {"probe": nonce} is the
 // endpoint check: the answer adds "probe_ack", an HMAC of the nonce only a
-// gateway with this configuration can produce (see package probe).
+// adapter with this configuration can produce (see package probe).
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {
-	out := map[string]any{"status": "ok", "service": "nhcx-gateway", "version": s.version,
+	out := map[string]any{"status": "ok", "service": "nhcx-adapter", "version": s.version,
 		"env": s.gw.Config().Env, "participant": s.gw.Config().Participant.ParticipantID}
 	if r.Method == http.MethodPost {
 		var req probe.Request
@@ -330,7 +330,7 @@ func (s *Server) token(refresh bool) http.HandlerFunc {
 		if code := r.URL.Query().Get("participant"); code != "" {
 			if s.gw.Profiles().ByCode(code) == nil {
 				s.fail(w, r, &abdm.Error{Code: "UNKNOWN_PARTICIPANT", Status: http.StatusNotFound,
-					Message: "no participant " + code + " is configured; this gateway holds " + strings.Join(s.gw.Profiles().Codes(), ", ")})
+					Message: "no participant " + code + " is configured; this adapter holds " + strings.Join(s.gw.Profiles().Codes(), ", ")})
 				return
 			}
 			client = s.gw.ABDMFor(code)
@@ -367,7 +367,7 @@ func (s *Server) outbound(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
-	req, err := gateway.ParseOutboundBody(r.PathValue("path"), body, r.Header)
+	req, err := adapter.ParseOutboundBody(r.PathValue("path"), body, r.Header)
 	if err != nil {
 		s.fail(w, r, err)
 		return
@@ -379,7 +379,7 @@ func (s *Server) outbound(w http.ResponseWriter, r *http.Request) {
 	}
 	// txn_id / correlation_id / request_id are hcxkit's acknowledgement
 	// shape. A client written for the kit reads those three and nothing else,
-	// so they are answered alongside this gateway's own fields rather than
+	// so they are answered alongside this adapter's own fields rather than
 	// instead of them. The ledger id is the transaction id: one stable
 	// identifier per message, which is what the kit's txn_id is used for.
 	writeJSON(w, res.GatewayStatus, map[string]any{
@@ -410,7 +410,7 @@ func (s *Server) inbound(w http.ResponseWriter, r *http.Request, path string) {
 	}
 	in, err := s.gw.Receive(path, body, clientIP(r))
 	if err != nil {
-		s.gw.RecordRefused(path, clientIP(r), gateway.PeekHeaders(body), err)
+		s.gw.RecordRefused(path, clientIP(r), adapter.PeekHeaders(body), err)
 		s.fail(w, r, err)
 		return
 	}
@@ -445,7 +445,7 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
 	e := abdm.AsError(err)
 	status := statusFor(e)
 	// Message failures on /out and /in are already logged as traffic lines
-	// by the gateway; only log the rest here.
+	// by the adapter; only log the rest here.
 	if !strings.HasPrefix(r.URL.Path, "/out/") && !strings.HasPrefix(r.URL.Path, "/in/") && !strings.HasPrefix(r.URL.Path, "/v1/") || e.Code == "UNAUTHORIZED" {
 		s.log.Warn("request failed", "method", r.Method, "path", r.URL.Path, "status", status,
 			"code", e.Code, "error", e.Message, "cause", causeOf(e), "request_id", requestIDFrom(r))
@@ -569,7 +569,7 @@ func (s *Server) requireAPIKey(next http.HandlerFunc) http.HandlerFunc {
 				got = r.Header.Get("X-Api-Key")
 			}
 			if subtle.ConstantTimeCompare([]byte(got), []byte(key)) != 1 {
-				w.Header().Set("WWW-Authenticate", `Bearer realm="nhcx-gateway"`)
+				w.Header().Set("WWW-Authenticate", `Bearer realm="nhcx-adapter"`)
 				writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": map[string]any{"code": "UNAUTHORIZED", "message": "missing or invalid API key"}})
 				return
 			}
@@ -597,7 +597,7 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // clientIP is the peer address; X-Forwarded-For is deliberately not trusted
-// here — put the gateway behind a proxy that rewrites it if you need it.
+// here — put the adapter behind a proxy that rewrites it if you need it.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

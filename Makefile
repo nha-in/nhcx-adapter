@@ -1,4 +1,4 @@
-# nhcx-gateway — build entry points. Pure Go, CGO off, no assets: the binary
+# nhcx-adapter — build entry points. Pure Go, CGO off, no assets: the binary
 # is the whole release.
 
 SHELL := /bin/bash
@@ -14,9 +14,9 @@ help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk -F':.*?## ' '{printf "  \033[1m%-12s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: build
-build: ## Build ./nhcx-gateway for this machine
-	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o nhcx-gateway .
-	@echo "built ./nhcx-gateway $(VERSION)"
+build: ## Build ./nhcx-adapter for this machine
+	CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)" -o nhcx-adapter .
+	@echo "built ./nhcx-adapter $(VERSION)"
 
 .PHONY: test
 test: ## Run the tests
@@ -37,4 +37,4 @@ release: ## Cross-compile every platform into ./dist
 
 .PHONY: clean
 clean: ## Remove build output
-	rm -rf nhcx-gateway dist
+	rm -rf nhcx-adapter dist

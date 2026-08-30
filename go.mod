@@ -1,4 +1,4 @@
-module nhcx-gateway
+module nhcx-adapter
 
 go 1.26.5
 

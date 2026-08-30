@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strconv"
 
-	"nhcx-gateway/internal/abdm"
-	"nhcx-gateway/internal/ledger"
+	"nhcx-adapter/internal/abdm"
+	"nhcx-adapter/internal/ledger"
 )
 
 // hcxkit publishes an /internal console API alongside the exchange routes,
@@ -105,7 +105,7 @@ func (s *Server) kitParticipantSearch(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- txns ----
 //
-// nanoemr does not wait for its callback to be poked: it polls the gateway
+// nanoemr does not wait for its callback to be poked: it polls the adapter
 // for the other side's answer, walking the thread its own send opened. That
 // is three more kit endpoints, and the ledger already holds everything they
 // report — a transaction id here is a ledger id, which is what /out and
@@ -230,7 +230,7 @@ func (s *Server) kitTxnFHIR(w http.ResponseWriter, r *http.Request) {
 }
 
 // kitTxnDispatch reports what became of a send. On hcxkit this asks a queue
-// worker to try again; this gateway dispatches synchronously inside the /out
+// worker to try again; this adapter dispatches synchronously inside the /out
 // call, so by the time a transaction has an id its fate is already decided
 // and there is nothing to retry. The answer says so in the kit's own
 // vocabulary, which is what its clients branch on.
@@ -262,7 +262,7 @@ func (s *Server) kitTxnDispatch(w http.ResponseWriter, r *http.Request) {
 //
 // The rest of the kit's /internal surface that these apps use is pass-through:
 // a POST to the ABDM participant service carrying the session token, with the
-// registry's answer handed back untouched. The gateway models none of it —
+// registry's answer handed back untouched. The adapter models none of it —
 // policies and registry records are ABDM's, not ours — so proxying is not a
 // shortcut, it is the whole job.
 
@@ -350,8 +350,8 @@ func (s *Server) kitParticipantsList(w http.ResponseWriter, r *http.Request) {
 }
 
 // kitParticipantCerts answers a counterparty's encryption certificate, from
-// the gateway's own cache when it is fresh — the certificate is the one thing
-// here the gateway does model, because it needs it to encrypt.
+// the adapter's own cache when it is fresh — the certificate is the one thing
+// here the adapter does model, because it needs it to encrypt.
 func (s *Server) kitParticipantCerts(w http.ResponseWriter, r *http.Request) {
 	body, ok := s.rawBody(w, r)
 	if !ok {
@@ -377,7 +377,7 @@ func (s *Server) kitParticipantCerts(w http.ResponseWriter, r *http.Request) {
 }
 
 // kitSavedParticipants is hcxkit's own list of participants an operator
-// pinned in its console — local state this gateway keeps none of. The
+// pinned in its console — local state this adapter keeps none of. The
 // configured profiles are the honest answer: those are the participants it
 // actually knows. Callers treat the list as a convenience and fall back to
 // asking the registry, so an unfamiliar shape here costs nothing.

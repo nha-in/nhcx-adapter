@@ -10,8 +10,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/keys"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/keys"
 )
 
 func key(k string) tea.KeyMsg {
@@ -183,7 +183,7 @@ func TestEditAndSave(t *testing.T) {
 	}
 	t.Setenv("NHCX_CLIENT_ID", "a")
 	t.Setenv("NHCX_CLIENT_SECRET", "b")
-	t.Setenv("NHCX_GATEWAY_API_KEY", "c")
+	t.Setenv("NHCX_ADAPTER_API_KEY", "c")
 	cfg, err := config.Parse(raw)
 	if err != nil {
 		t.Fatalf("saved file must parse: %v", err)
@@ -196,7 +196,7 @@ func TestEditAndSave(t *testing.T) {
 	if cmd == nil {
 		t.Error("q on a clean model must quit")
 	}
-	if v := m.View(); !strings.Contains(v, "nhcx-gateway") || !strings.Contains(v, "Environment") {
+	if v := m.View(); !strings.Contains(v, "nhcx-adapter") || !strings.Contains(v, "Environment") {
 		t.Error("view renders")
 	}
 }
@@ -244,7 +244,7 @@ func TestSecretsMasked(t *testing.T) {
 
 // The editor is a form over the default profile and the shared sections; it
 // knows nothing about the "participants" array. It must still carry it
-// through a save untouched — silently dropping a gateway's other identities
+// through a save untouched — silently dropping an adapter's other identities
 // would take their traffic down with them.
 func TestSavePreservesHostedParticipants(t *testing.T) {
 	const raw = `{

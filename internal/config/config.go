@@ -1,4 +1,4 @@
-// Package config loads and validates the nhcx-gateway configuration.
+// Package config loads and validates the nhcx-adapter configuration.
 //
 // The file is JSON. Two conveniences keep secrets out of it: any string
 // value may reference an environment variable as ${NAME}, and key material
@@ -17,10 +17,10 @@ import (
 	"regexp"
 	"strings"
 
-	"nhcx-gateway/internal/keys"
+	"nhcx-adapter/internal/keys"
 )
 
-// Environment names the NHCX deployment a gateway instance talks to.
+// Environment names the NHCX deployment an adapter instance talks to.
 type Environment string
 
 const (
@@ -28,7 +28,7 @@ const (
 	Production Environment = "production"
 )
 
-// URLs are the three ABDM endpoints the gateway needs.
+// URLs are the three ABDM endpoints the adapter needs.
 type URLs struct {
 	// NHCX is the exchange gateway base, e.g. https://apisbx.abdm.gov.in/hcx/v1.
 	NHCX string `json:"nhcx"`
@@ -60,11 +60,11 @@ func EnvironmentDefaults(env Environment) (URLs, string) {
 	}
 }
 
-// Participant is one identity this gateway holds on the exchange.
+// Participant is one identity this adapter holds on the exchange.
 //
 // The top-level "participant" is the default profile. Additional profiles in
 // "participants" are hosted alongside it: each has its own registry code and
-// its own callback, so one gateway can serve a provider and a payer at once
+// its own callback, so one adapter can serve a provider and a payer at once
 // and deliver each one's traffic to its own backend. Anything a hosted
 // profile leaves unset is inherited from the default — credentials, key and
 // callback — which is what makes a profile that is only
@@ -109,7 +109,7 @@ type Callback struct {
 	Routes map[string]string `json:"routes,omitempty"`
 }
 
-// Certificate drives "nhcx-gateway cert generate". The certificate's
+// Certificate drives "nhcx-adapter cert generate". The certificate's
 // subject is always the participant id — the registry cares about the key,
 // not the name — so only the lifetime and the file names are configurable
 // (paths are relative to the config file).
@@ -133,12 +133,12 @@ type Auth struct {
 type Certs struct {
 	CacheHours int `json:"cacheHours"`
 	// RefuseSelfKey decides what happens when the registry hands back one of
-	// this gateway's own certificates for another participant. Unset means
+	// this adapter's own certificates for another participant. Unset means
 	// "in production, refuse; in sandbox, allow" — see RefusesSelfKey.
 	RefuseSelfKey *bool `json:"refuseSelfKey,omitempty"`
 }
 
-// Ledger records every message that crosses the gateway (see package ledger).
+// Ledger records every message that crosses the adapter (see package ledger).
 type Ledger struct {
 	Enabled *bool `json:"enabled,omitempty"`
 	// Dir holds the records, relative to the config file. Default data/ledger.
@@ -166,7 +166,7 @@ type Log struct {
 type Config struct {
 	Env    string `json:"env"`
 	Listen string `json:"listen"`
-	// PublicURL is how NHCX reaches this gateway from the outside, e.g.
+	// PublicURL is how NHCX reaches this adapter from the outside, e.g.
 	// https://hcx.example.com/in — what belongs in the registry's
 	// endpoint_url. Optional; used to propose and verify the registration.
 	PublicURL string `json:"publicUrl"`
@@ -185,7 +185,7 @@ type Config struct {
 
 	TLS         TLS         `json:"tls"`
 	Participant Participant `json:"participant"`
-	// Participants are additional identities hosted by this gateway; see
+	// Participants are additional identities hosted by this adapter; see
 	// Participant. The default profile above is always first in AllParticipants.
 	Participants []Participant `json:"participants,omitempty"`
 	Callback     Callback      `json:"callback"`
@@ -461,7 +461,7 @@ func (c *Config) Validate() error {
 	}
 	switch pk := strings.TrimSpace(c.Participant.PrivateKey); {
 	case pk == "":
-		errs = append(errs, errors.New("participant.privateKey is required (PEM, base64 PEM, or @file) — nhcx-gateway cert generate creates one"))
+		errs = append(errs, errors.New("participant.privateKey is required (PEM, base64 PEM, or @file) — nhcx-adapter cert generate creates one"))
 	case strings.HasPrefix(pk, "@"):
 		errs = append(errs, fmt.Errorf("participant.privateKey: %s was not read (call ResolveFiles first)", pk))
 	default:
@@ -607,14 +607,14 @@ func (c *Config) IsProduction() bool { return c.Environment() == Production }
 // APIKeyRequired reports whether a caller must present the API key.
 //
 // Production: always, and ValidateServe refuses to start without a key set.
-// Sandbox: no, even when a key is configured. A sandbox gateway is worked by
+// Sandbox: no, even when a key is configured. A sandbox adapter is worked by
 // hand and by clients written for hcxkit, which authenticates none of these
 // routes — demanding a key there turns every call into a 401 for no security
 // anyone asked for. The key is still honoured when presented, so a client
 // that sends one is not punished for it.
 //
 // requireApiKey overrides both directions: set it true to close a sandbox
-// gateway that is reachable from the network, false to open a production one
+// adapter that is reachable from the network, false to open a production one
 // (which ValidateServe will still complain about).
 func (c *Config) APIKeyRequired() bool {
 	if c.RequireAPIKey != nil {
@@ -658,7 +658,7 @@ func (c *Config) CallbackAppendsPath() bool {
 
 // ------------------------------------------------------------- profiles ----
 
-// AllParticipants returns every identity this gateway holds, the default
+// AllParticipants returns every identity this adapter holds, the default
 // profile first. Hosted profiles inherit the default's credentials and key
 // where they set none of their own, so what comes back is always usable.
 func (c *Config) AllParticipants() []Participant {

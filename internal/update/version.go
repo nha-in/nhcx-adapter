@@ -1,7 +1,7 @@
 // Package update checks GitHub releases for other versions of this binary
 // and swaps the running executable for one of them — newer or older. The
 // release layout is the one scripts/build.sh and the CI workflow produce:
-// one archive per platform named nhcx-gateway_<tag>_<os>_<arch>.tar.gz
+// one archive per platform named nhcx-adapter_<tag>_<os>_<arch>.tar.gz
 // (.zip on Windows) plus a SHA256SUMS file.
 package update
 

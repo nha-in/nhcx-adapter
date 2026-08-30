@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Cross-compile nhcx-gateway.
+# Cross-compile nhcx-adapter.
 #
 #   ./scripts/build.sh                  # every default target, packaged into ./dist
 #   ./scripts/build.sh linux/amd64      # one target
@@ -29,7 +29,7 @@ fi
 
 MODE="${MODE:-release}"
 DIST="${DIST:-dist}"
-NAME="nhcx-gateway"
+NAME="nhcx-adapter"
 
 if [ -z "${VERSION:-}" ]; then
   VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"

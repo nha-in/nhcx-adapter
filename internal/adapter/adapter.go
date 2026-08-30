@@ -1,9 +1,9 @@
-// Package gateway is the adapter itself: it turns an integrator's FHIR
+// Package adapter is the adapter proper: it turns an integrator's FHIR
 // bundle into an encrypted NHCX call, and an encrypted NHCX callback into a
 // plain delivery to the integrator. Both directions are synchronous and
 // stateless — the only state is the session token and certificate cache in
 // the abdm client.
-package gateway
+package adapter
 
 import (
 	"bytes"
@@ -18,11 +18,11 @@ import (
 	"strings"
 	"time"
 
-	"nhcx-gateway/internal/abdm"
-	"nhcx-gateway/internal/config"
-	"nhcx-gateway/internal/ledger"
-	"nhcx-gateway/internal/nhcx"
-	"nhcx-gateway/internal/participant"
+	"nhcx-adapter/internal/abdm"
+	"nhcx-adapter/internal/config"
+	"nhcx-adapter/internal/ledger"
+	"nhcx-adapter/internal/nhcx"
+	"nhcx-adapter/internal/participant"
 )
 
 // identity is one hosted participant: its profile, the ABDM client that acts
@@ -34,11 +34,11 @@ type identity struct {
 	http *http.Client
 }
 
-// Gateway holds every participant this process is, and their ABDM clients.
-// One gateway can front several identities at once: inbound messages are
+// Adapter holds every participant this process is, and their ABDM clients.
+// One adapter can front several identities at once: inbound messages are
 // routed to the addressed participant's callback, outbound ones are sent as
 // the participant named in x-hcx-sender_code.
-type Gateway struct {
+type Adapter struct {
 	cfg      *config.Config
 	profiles *participant.Set
 	pool     *abdm.Pool
@@ -48,8 +48,8 @@ type Gateway struct {
 	ledger   *ledger.Store // nil when disabled
 }
 
-// New resolves every configured participant and builds the gateway.
-func New(cfg *config.Config, logger *slog.Logger) (*Gateway, error) {
+// New resolves every configured participant and builds the adapter.
+func New(cfg *config.Config, logger *slog.Logger) (*Adapter, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -57,7 +57,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Gateway, error) {
 	if err != nil {
 		return nil, err
 	}
-	g := &Gateway{
+	g := &Adapter{
 		cfg:      cfg,
 		profiles: profiles,
 		pool:     abdm.NewPool(cfg, profiles, logger),
@@ -91,14 +91,14 @@ func New(cfg *config.Config, logger *slog.Logger) (*Gateway, error) {
 }
 
 // Ledger returns the message ledger, or nil when disabled.
-func (g *Gateway) Ledger() *ledger.Store { return g.ledger }
+func (g *Adapter) Ledger() *ledger.Store { return g.ledger }
 
-// Profiles returns every identity this gateway holds, the default first.
-func (g *Gateway) Profiles() *participant.Set { return g.profiles }
+// Profiles returns every identity this adapter holds, the default first.
+func (g *Adapter) Profiles() *participant.Set { return g.profiles }
 
 // identityFor resolves a participant code to its identity, falling back to
 // the default profile so a message with no usable code is still handled.
-func (g *Gateway) identityFor(code string) *identity {
+func (g *Adapter) identityFor(code string) *identity {
 	if c := nhcx.NormalizeCode(code); c != "" {
 		if id, ok := g.ids[strings.ToLower(c)]; ok {
 			return id
@@ -109,7 +109,7 @@ func (g *Gateway) identityFor(code string) *identity {
 
 // record writes to the ledger when enabled; a ledger failure is logged, it
 // never fails the message.
-func (g *Gateway) record(e *ledger.Entry) {
+func (g *Adapter) record(e *ledger.Entry) {
 	if g.ledger == nil {
 		return
 	}
@@ -120,18 +120,18 @@ func (g *Gateway) record(e *ledger.Entry) {
 
 // ABDM exposes the default participant's client for the token / cert CLI
 // commands and probes.
-func (g *Gateway) ABDM() *abdm.Client { return g.def.abdm }
+func (g *Adapter) ABDM() *abdm.Client { return g.def.abdm }
 
 // ABDMFor exposes the client that acts as one participant. An unknown code
 // falls back to the default, so callers never have to nil-check.
-func (g *Gateway) ABDMFor(code string) *abdm.Client { return g.identityFor(code).abdm }
+func (g *Adapter) ABDMFor(code string) *abdm.Client { return g.identityFor(code).abdm }
 
 // Config returns the loaded configuration.
-func (g *Gateway) Config() *config.Config { return g.cfg }
+func (g *Adapter) Config() *config.Config { return g.cfg }
 
 // SetHTTPClients swaps the transports used for ABDM and callback calls
 // (tests). Both apply to every hosted participant.
-func (g *Gateway) SetHTTPClients(upstream, callback *http.Client) {
+func (g *Adapter) SetHTTPClients(upstream, callback *http.Client) {
 	if upstream != nil {
 		g.pool.SetHTTPClient(upstream)
 	}
@@ -172,7 +172,7 @@ func (r *OutboundResult) Accepted() bool { return r.GatewayStatus >= 200 && r.Ga
 // Send encrypts the bundle for its recipient and posts it to NHCX. Every
 // attempt — accepted, rejected by NHCX, or failed before dispatch — is
 // recorded in the ledger.
-func (g *Gateway) Send(ctx context.Context, req OutboundRequest) (*OutboundResult, error) {
+func (g *Adapter) Send(ctx context.Context, req OutboundRequest) (*OutboundResult, error) {
 	path := nhcx.CleanPath(req.Path)
 	if path == "" {
 		return nil, &abdm.Error{Code: "NO_PATH", Message: "NHCX API path is required (e.g. v1/preauth/submit)"}
@@ -203,7 +203,7 @@ func (g *Gateway) Send(ctx context.Context, req OutboundRequest) (*OutboundResul
 	// The sender code chooses which hosted identity sends: its credentials
 	// mint the session token and its code goes in the protected header. An
 	// unknown code falls back to the default profile rather than refusing —
-	// the same leniency the single-participant gateway had.
+	// the same leniency the single-participant adapter had.
 	sender := g.identityFor(nhcx.GetString(headers, nhcx.HdrSender))
 	recipient := nhcx.GetString(headers, nhcx.HdrRecipient)
 
@@ -397,7 +397,7 @@ func PeekHeaders(body []byte) map[string]any {
 }
 
 // Receive parses and decrypts what NHCX posted to path.
-func (g *Gateway) Receive(path string, body []byte, remoteAddr string) (*Inbound, error) {
+func (g *Adapter) Receive(path string, body []byte, remoteAddr string) (*Inbound, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(body, &obj); err != nil {
 		return nil, &abdm.Error{Code: "INVALID_BODY", Message: "body must be a JSON object", Err: err}
@@ -415,7 +415,7 @@ func (g *Gateway) Receive(path string, body []byte, remoteAddr string) (*Inbound
 		}
 		rc := nhcx.GetString(headers, nhcx.HdrRecipient)
 		if rc != "" && !g.profiles.IsLocal(rc) {
-			return nil, &abdm.Error{Code: "WRONG_RECIPIENT", Message: fmt.Sprintf("message is addressed to %s, this gateway holds %s",
+			return nil, &abdm.Error{Code: "WRONG_RECIPIENT", Message: fmt.Sprintf("message is addressed to %s, this adapter holds %s",
 				nhcx.NormalizeCode(rc), strings.Join(g.profiles.Codes(), ", "))}
 		}
 		prof, plain, err := g.decryptFor(rc, compact)
@@ -458,7 +458,7 @@ func (g *Gateway) Receive(path string, body []byte, remoteAddr string) (*Inbound
 // RecordInbound writes an inbound message and its delivery outcome to the
 // ledger. res may be nil (never delivered); err is the delivery or receive
 // error, if any.
-func (g *Gateway) RecordInbound(in *Inbound, res *DeliveryResult, err error) {
+func (g *Adapter) RecordInbound(in *Inbound, res *DeliveryResult, err error) {
 	if g.ledger == nil || in == nil {
 		return
 	}
@@ -509,9 +509,9 @@ func (g *Gateway) RecordInbound(in *Inbound, res *DeliveryResult, err error) {
 	g.log.Log(context.Background(), level, "inbound", attrs...)
 }
 
-// RecordRefused records an inbound message the gateway could not even parse
+// RecordRefused records an inbound message the adapter could not even parse
 // or decrypt, so the attempt is visible in the ledger.
-func (g *Gateway) RecordRefused(path, remoteAddr string, headers map[string]any, err error) {
+func (g *Adapter) RecordRefused(path, remoteAddr string, headers map[string]any, err error) {
 	if g.ledger == nil {
 		return
 	}
@@ -546,8 +546,8 @@ type DeliveryResult struct {
 // DeliveryURL is where an inbound message on path, addressed to code, is
 // posted: the route configured for that exact path, else the participant's
 // callback.url (+ path). An empty or unknown code uses the default profile,
-// so a single-participant gateway behaves exactly as before.
-func (g *Gateway) DeliveryURL(path, code string) string {
+// so a single-participant adapter behaves exactly as before.
+func (g *Adapter) DeliveryURL(path, code string) string {
 	return deliveryURL(g.identityFor(code).prof.Callback, path)
 }
 
@@ -583,7 +583,7 @@ func (in *Inbound) Envelope() map[string]any {
 // Deliver posts the decrypted message to the integrator and waits for the
 // answer. A non-2xx answer is returned as an error so the caller can refuse
 // NHCX's delivery and let the exchange retry.
-func (g *Gateway) Deliver(ctx context.Context, in *Inbound) (*DeliveryResult, error) {
+func (g *Adapter) Deliver(ctx context.Context, in *Inbound) (*DeliveryResult, error) {
 	// The participant the message was addressed to owns the callback it is
 	// delivered to. Falling back to the default keeps protocol messages —
 	// which carry no recipient of their own — working.
@@ -689,7 +689,7 @@ func (in *Inbound) Acceptance() map[string]any {
 // recipient header is absent or names a code we do not hold under that
 // spelling. Hosted profiles that share the default's certificate share its
 // key, so this is one attempt in the common case.
-func (g *Gateway) decryptFor(code, compact string) (*participant.Profile, []byte, error) {
+func (g *Adapter) decryptFor(code, compact string) (*participant.Profile, []byte, error) {
 	tried := map[*rsa.PrivateKey]bool{}
 	attempt := func(prof *participant.Profile) ([]byte, bool) {
 		if prof == nil || prof.Key == nil || tried[prof.Key] {
@@ -718,7 +718,7 @@ func (g *Gateway) decryptFor(code, compact string) (*participant.Profile, []byte
 
 // Decrypt opens a compact JWE with whichever participant's key fits (CLI
 // helper).
-func (g *Gateway) Decrypt(compact string) (map[string]any, []byte, error) {
+func (g *Adapter) Decrypt(compact string) (map[string]any, []byte, error) {
 	headers, err := nhcx.ParseHeader(compact)
 	if err != nil {
 		return nil, nil, err

@@ -7,7 +7,7 @@ import (
 )
 
 func TestRender(t *testing.T) {
-	out := Render("NHCX GATEWAY")
+	out := Render("NHCX ADAPTER")
 	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	if len(lines) != 5 {
 		t.Fatalf("want 5 rows, got %d:\n%s", len(lines), out)
@@ -21,7 +21,7 @@ func TestRender(t *testing.T) {
 			t.Errorf("row without blocks: %q", l)
 		}
 	}
-	for _, r := range "NHCXGATEWAY" {
+	for _, r := range "NHCXADAPTER" {
 		if g := glyphs[r]; len(g) != 5 {
 			t.Errorf("glyph %c has %d rows", r, len(g))
 		} else {
