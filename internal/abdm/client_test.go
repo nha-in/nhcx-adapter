@@ -87,3 +87,19 @@ func TestSessionsModeDefaultsTTLAndReportsRejection(t *testing.T) {
 		t.Errorf("configured tokenTtlSeconds must apply when the response has no expiry: %s", ttl)
 	}
 }
+
+func TestRegistryReason(t *testing.T) {
+	cases := map[string]string{
+		`{"error":{"code":"NHCX-1015","message":"not authorized"}}`: "NHCX-1015 not authorized",
+		`{"error":{"code":"NHCX-1015"}}`:                            "NHCX-1015",
+		`{"message":"bad request"}`:                                 "bad request",
+		`{"error":"boom"}`:                                          "boom",
+		`not json`:                                                  "",
+		`{}`:                                                        "",
+	}
+	for in, want := range cases {
+		if got := registryReason([]byte(in)); got != want {
+			t.Errorf("registryReason(%s) = %q, want %q", in, got, want)
+		}
+	}
+}

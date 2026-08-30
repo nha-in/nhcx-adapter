@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -442,7 +443,16 @@ func (c *Client) updateParticipant(ctx context.Context, fields map[string]any, r
 		return nil, err
 	}
 	if status < 200 || status >= 300 {
-		return nil, &Error{Code: fmt.Sprintf("PARTICIPANT_UPDATE_HTTP_%d", status), Message: "participant registry refused the certificate update",
+		names := make([]string, 0, len(fields))
+		for k := range fields {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		msg := "participant registry refused the update of " + strings.Join(names, ", ")
+		if reason := registryReason(raw); reason != "" {
+			msg += ": " + reason
+		}
+		return nil, &Error{Code: fmt.Sprintf("PARTICIPANT_UPDATE_HTTP_%d", status), Message: msg,
 			Retryable: status >= 500 || status == 429, Status: status, Body: clip(raw)}
 	}
 	c.ForgetCertificate(c.Code())
@@ -583,6 +593,33 @@ func firstNumber(m map[string]any, keys ...string) float64 {
 		}
 	}
 	return 0
+}
+
+// registryReason extracts the human-readable reason from a registry error
+// body of the shape {"error": {"code": "NHCX-1015", "message": "…"}} (or a
+// top-level "message"), so the caller can show it instead of a bare status.
+func registryReason(raw []byte) string {
+	var out map[string]any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ""
+	}
+	code, msg := "", firstString(out, "message", "error_description")
+	if e, ok := out["error"].(map[string]any); ok {
+		code = firstString(e, "code")
+		if m := firstString(e, "message"); m != "" {
+			msg = m
+		}
+	} else if e := firstString(out, "error"); e != "" && msg == "" {
+		msg = e
+	}
+	switch {
+	case code != "" && msg != "":
+		return code + " " + msg
+	case code != "":
+		return code
+	default:
+		return msg
+	}
 }
 
 func clip(b []byte) string { return clipStr(string(b), maxErrBody) }

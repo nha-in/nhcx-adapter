@@ -531,6 +531,7 @@ repository.
 | `CERT_NOT_FOUND` on `/out` | the recipient has no certificate on the registry | they must register one; nothing you can do locally |
 | `SELF_ENCRYPTION_KEY` | registry handed out *your* certificate for another code | refresh with `cert CODE --refresh`; contact the registry |
 | `registered endpoint … without a probe acknowledgement` | the URL is answered by something other than this adapter (proxy error page, hcxkit, …) | route the path to `listen`; then *update the registry* in the menu or set `publicUrl` |
+| `PARTICIPANT_UPDATE_HTTP_400 … NHCX-1015 You are not authorized to update/modify details` | the registry only lets the **client id that created the participant** change its `endpoint_url` / certificate; your `clientId` is a different one | update it with the creator's credentials (or on the NHCX participant portal / via NHCX support); nothing the adapter can do with these credentials |
 | `WRONG_RECIPIENT` on `/in` | a message addressed to another participant reached you | check the registry's `endpoint_url` for that participant |
 | `DECRYPT_FAILED` on `/in` | encrypted for a key you don't hold | your registered certificate is not this key — run `check` |
 | callback returns 4xx/5xx | your backend rejected the delivery | NHCX will retry five times; fix the backend, keep it idempotent |
