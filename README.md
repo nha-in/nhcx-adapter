@@ -431,6 +431,8 @@ Linux amd64/arm64/arm/386/ppc64le/s390x/riscv64 · macOS amd64/arm64 ·
 Windows amd64/arm64/386 · FreeBSD amd64/arm64. CI runs the checks, packages
 each target as its own artifact, and builds,
 boots and pushes the container image on each push;
+every push to main also refreshes the `edge` pre-release with fresh
+binaries (which `update` never offers), and
 `git tag v1.0.0 && git push origin v1.0.0` publishes them as a release. The
 archive name `nhcx-adapter_<tag>_<os>_<arch>.tar.gz|.zip` and the `SHA256SUMS`
 are what `update` relies on — keep both if you fork the release process.

@@ -162,14 +162,23 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # Tag vX.Y.Z (git tag v1.0.0 && git push --tags) to publish a GitHub
-  # release with every archive and its checksum attached.
+  # Every build lands on a GitHub release:
+  #   - vX.Y.Z tag → release "nhcx-adapter vX.Y.Z" (image :X.Y.Z, :latest)
+  #   - push to main → the rolling "edge" pre-release, deleted and recreated
+  #     at the new commit each time (image :main). `update` ignores it: the
+  #     tag is not a version.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main')
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/download-artifact@v8
         with:
@@ -178,18 +187,37 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS && cat SHA256SUMS
+      - name: Release name
+        id: rel
+        run: |
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "image=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=edge" >> "$GITHUB_OUTPUT"
+            echo "image=main" >> "$GITHUB_OUTPUT"
+          fi
       - name: Release body
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+          IMAGE: ${{ steps.rel.outputs.image }}
         run: |
           {
-            echo "## nhcx-adapter ${GITHUB_REF_NAME}"
-            echo
-            echo "Stateless NHCX adapter — one binary, one config. Pick your platform, unpack, run \`./nhcx-adapter config edit\` then \`./nhcx-adapter serve\` (or \`serve-hidden\` / \`stop\` / \`update\` scripts from the archive). Already installed? \`nhcx-adapter update --to ${GITHUB_REF_NAME}\`."
+            if [ "$TAG" = edge ]; then
+              echo "## nhcx-adapter edge (${GITHUB_SHA::7})"
+              echo
+              echo "Latest build of \`main\`, replaced on every push. Not a release: \`nhcx-adapter update\` never offers it. Use a \`vX.Y.Z\` release for production."
+            else
+              echo "## nhcx-adapter ${TAG}"
+              echo
+              echo "Stateless NHCX adapter — one binary, one config. Pick your platform, unpack, run \`./nhcx-adapter config edit\` then \`./nhcx-adapter serve\` (or \`serve-hidden\` / \`stop\` / \`update\` scripts from the archive). Already installed? \`nhcx-adapter update --to ${TAG}\`."
+            fi
             echo
             echo "| Platform | Archive |"
             echo "| --- | --- |"
             for f in dist/*.tar.gz dist/*.zip; do
               base="$(basename "$f")"
-              rest="${base#nhcx-adapter_${GITHUB_REF_NAME}_}"
+              rest="${base#nhcx-adapter_*_}"
               os="${rest%%_*}"; arch="${rest#*_}"; arch="${arch%%.*}"
               case "$os" in
                 linux)   os="Linux" ;;
@@ -211,15 +239,19 @@ jobs:
             echo
             echo "Verify a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
             echo
-            echo "Container image: \`docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}\` (linux/amd64, arm64, arm/v7, arm/v6, 386, ppc64le, s390x, riscv64)."
+            echo "Container image: \`docker pull ghcr.io/${GITHUB_REPOSITORY}:${IMAGE}\` (linux/amd64, arm64, arm/v7, arm/v6, 386, ppc64le, s390x, riscv64)."
           } > body.md
           cat body.md
-      - uses: softprops/action-gh-release@v3
-        with:
-          name: nhcx-adapter ${{ github.ref_name }}
-          body_path: body.md
-          generate_release_notes: true
-          files: |
-            dist/*.tar.gz
-            dist/*.zip
-            dist/SHA256SUMS
+      - name: Publish
+        env:
+          TAG: ${{ steps.rel.outputs.tag }}
+        run: |
+          if [ "$TAG" = edge ]; then
+            gh release delete edge --cleanup-tag --yes || true
+            gh release create edge dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+              --target "$GITHUB_SHA" --prerelease --latest=false \
+              --title "nhcx-adapter edge" --notes-file body.md
+          else
+            gh release create "$TAG" dist/*.tar.gz dist/*.zip dist/SHA256SUMS \
+              --verify-tag --title "nhcx-adapter ${TAG}" --notes-file body.md --generate-notes
+          fi
