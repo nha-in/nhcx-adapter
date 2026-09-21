@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>nhcx-adapter · sign in</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --ink: #12151a; --dim: #5d6673;
+    --line: #dfe3e8; --accent: #0b7285; --bad: #c92a2a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1216; --card: #171b21; --ink: #e6e9ee; --dim: #98a1ad;
+            --line: #262c34; --accent: #3bc9db; --bad: #ff8787; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: var(--bg); color: var(--ink);
+         font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  form { width: min(92vw, 22rem); background: var(--card); border: 1px solid var(--line);
+         border-radius: 10px; padding: 1.6rem; }
+  h1 { margin: 0 0 .2rem; font-size: 1rem; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); }
+  p.sub { margin: 0 0 1.2rem; color: var(--dim); font-size: .85rem; }
+  label { display: block; font-size: .8rem; color: var(--dim); margin-bottom: .35rem; }
+  input { width: 100%; padding: .6rem .7rem; font: inherit; color: var(--ink);
+          background: var(--bg); border: 1px solid var(--line); border-radius: 6px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button { margin-top: 1rem; width: 100%; padding: .6rem; font: inherit; font-weight: 600;
+           color: #fff; background: var(--accent); border: 0; border-radius: 6px; cursor: pointer; }
+  .msg { margin-top: .9rem; color: var(--bad); font-size: .85rem; }
+</style>
+</head>
+<body>
+  <form method="post" action="{{BASE}}/login">
+    <h1>nhcx adapter</h1>
+    <p class="sub">Operator panel</p>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+    <button type="submit">Sign in</button>
+    <div class="msg">{{MESSAGE}}</div>
+  </form>
+</body>
+</html>

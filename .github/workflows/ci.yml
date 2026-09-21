@@ -1,0 +1,189 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Vet, race tests, and a compile of every release target.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 } # git describe needs the tags
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: make check
+      - run: make compile-all
+
+  # Package every platform. On ordinary pushes the archives are attached to
+  # the workflow run (Actions → run → Artifacts); on a vX.Y.Z tag they go to
+  # the release below.
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: actions/setup-go@v5
+        with: { go-version-file: go.mod }
+      - run: make release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nhcx-adapter-${{ github.ref_name }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  # Container image for linux/amd64 + linux/arm64. Every run builds it and
+  # boots it; pushes to ghcr.io go out on main (:main, :sha-…) and on vX.Y.Z
+  # tags (:X.Y.Z, :X.Y, :latest). Pull requests build and test only.
+  docker:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - name: Version
+        id: v
+        run: |
+          echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
+          echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha
+      - name: Build for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: nhcx-adapter:ci
+          build-args: |
+            VERSION=${{ steps.v.outputs.version }}
+            COMMIT=${{ steps.v.outputs.commit }}
+            BUILT_AT=${{ steps.v.outputs.built_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      # The first-run path an operator takes: generate a key into the volume,
+      # start serve, and expect /healthz from outside the container.
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          test "$(docker run --rm --entrypoint id nhcx-adapter:ci -u)" = 10001
+          docker run --rm nhcx-adapter:ci version
+          cat > smoke.env <<'EOF'
+          NHCX_PARTICIPANT_ID=1000000000@hcx
+          NHCX_CLIENT_ID=ci
+          NHCX_CLIENT_SECRET=ci
+          NHCX_CALLBACK_URL=http://127.0.0.1:8765/nhcx/callback
+          EOF
+          docker volume create smoke
+          docker run --rm --env-file smoke.env -v smoke:/data nhcx-adapter:ci cert generate
+          docker run -d --name smoke --env-file smoke.env -v smoke:/data -p 8090:8090 \
+            nhcx-adapter:ci serve --no-tui --skip-checks
+          ok=
+          for _ in $(seq 1 30); do
+            if body="$(curl -fsS http://127.0.0.1:8090/healthz)"; then ok=1; break; fi
+            sleep 1
+          done
+          docker logs smoke
+          docker rm -f smoke
+          test -n "$ok"
+          echo "$body"
+          echo "$body" | grep -q '"version":"${{ steps.v.outputs.version }}"'
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.v.outputs.version }}
+            COMMIT=${{ steps.v.outputs.commit }}
+            BUILT_AT=${{ steps.v.outputs.built_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Tag vX.Y.Z (git tag v1.0.0 && git push --tags) to publish a GitHub
+  # release with every archive and its checksum attached.
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: nhcx-adapter-${{ github.ref_name }}
+          path: dist
+      - name: Release body
+        run: |
+          {
+            echo "## nhcx-adapter ${GITHUB_REF_NAME}"
+            echo
+            echo "Stateless NHCX adapter — one binary, one config. Pick your platform, unpack, run \`./nhcx-adapter config edit\` then \`./nhcx-adapter serve\` (or \`serve-hidden\` / \`stop\` / \`update\` scripts from the archive). Already installed? \`nhcx-adapter update --to ${GITHUB_REF_NAME}\`."
+            echo
+            echo "| Platform | Archive |"
+            echo "| --- | --- |"
+            for f in dist/*.tar.gz dist/*.zip; do
+              base="$(basename "$f")"
+              rest="${base#nhcx-adapter_${GITHUB_REF_NAME}_}"
+              os="${rest%%_*}"; arch="${rest#*_}"; arch="${arch%%.*}"
+              case "$os" in
+                linux)   os="Linux" ;;
+                darwin)  os="macOS" ;;
+                windows) os="Windows" ;;
+                freebsd) os="FreeBSD" ;;
+              esac
+              case "$arch" in
+                amd64) arch="x86-64" ;;
+                arm64) arch="ARM64 (Apple silicon / Graviton)" ;;
+                arm)   arch="ARMv7 (32-bit)" ;;
+                386)   arch="x86 (32-bit)" ;;
+              esac
+              echo "| $os · $arch | \`$base\` |"
+            done
+            echo
+            echo "Verify a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
+            echo
+            echo "Container image: \`docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}\` (linux/amd64, linux/arm64)."
+          } > body.md
+          cat body.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: nhcx-adapter ${{ github.ref_name }}
+          body_path: body.md
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS

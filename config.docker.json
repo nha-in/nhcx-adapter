@@ -1,0 +1,30 @@
+{
+  "env": "${NHCX_ENV}",
+  "listen": "0.0.0.0:8090",
+  "publicUrl": "${NHCX_PUBLIC_URL}",
+  "apiKey": "${NHCX_ADAPTER_API_KEY}",
+  "participant": {
+    "participantId": "${NHCX_PARTICIPANT_ID}",
+    "clientId": "${NHCX_CLIENT_ID}",
+    "clientSecret": "${NHCX_CLIENT_SECRET}",
+    "privateKey": "@/data/private_key.pem"
+  },
+  "callback": {
+    "url": "${NHCX_CALLBACK_URL}",
+    "apiKey": "${NHCX_CALLBACK_API_KEY}"
+  },
+  "certificate": {
+    "privateKeyFile": "/data/private_key.pem",
+    "certificateFile": "/data/certificate.pem"
+  },
+  "ledger": {
+    "dir": "/data/ledger"
+  },
+  "panel": {
+    "password": "${NHCX_PANEL_PASSWORD}"
+  },
+  "log": {
+    "level": "${NHCX_LOG_LEVEL}",
+    "format": "${NHCX_LOG_FORMAT}"
+  }
+}

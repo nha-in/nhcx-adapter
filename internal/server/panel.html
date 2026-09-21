@@ -1,0 +1,617 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>nhcx-adapter · panel</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #12151a; --dim: #5d6673; --line: #dfe3e8;
+    --accent: #0b7285; --good: #2b8a3e; --bad: #c92a2a; --warn: #b07000;
+    --out: #9c36b5; --in: #1971c2; --code: #f1f3f5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0f1216; --card: #171b21; --ink: #e6e9ee; --dim: #98a1ad; --line: #262c34;
+            --accent: #3bc9db; --good: #69db7c; --bad: #ff8787; --warn: #ffd43b;
+            --out: #e599f7; --in: #74c0fc; --code: #10141a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+           padding: .55rem .9rem; background: var(--card); border-bottom: 1px solid var(--line); }
+  .brand { font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--accent); }
+  .chip { font-size: .75rem; padding: .1rem .45rem; border: 1px solid var(--line);
+          border-radius: 999px; color: var(--dim); white-space: nowrap; }
+  .grow { flex: 1; }
+  nav { display: flex; gap: .2rem; padding: .4rem .9rem 0; background: var(--card);
+        border-bottom: 1px solid var(--line); overflow-x: auto; }
+  nav button { font: inherit; background: none; border: 0; border-bottom: 2px solid transparent;
+               padding: .45rem .7rem; color: var(--dim); cursor: pointer; white-space: nowrap; }
+  nav button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  main { padding: .9rem; }
+  section[hidden] { display: none; }
+  .bar { display: flex; gap: .4rem; flex-wrap: wrap; align-items: center; margin-bottom: .7rem; }
+  input, select, textarea, button.act { font: inherit; color: var(--ink); background: var(--card);
+    border: 1px solid var(--line); border-radius: 6px; padding: .35rem .5rem; }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  textarea { width: 100%; min-height: 17rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  button.act { cursor: pointer; }
+  button.act:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  button.danger { color: var(--bad); border-color: var(--bad); }
+  .muted { color: var(--dim); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: .8rem; margin-bottom: .7rem; min-width: 0; }
+  .card h2 { margin: 0 0 .5rem; font-size: .78rem; text-transform: uppercase; letter-spacing: .09em; color: var(--dim); }
+  .grid { display: grid; gap: .7rem; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); }
+  /* minmax(0,…) or the value column collapses to a character a line inside a
+     narrow card, which is what a 1fr column does when its content can wrap. */
+  .kv { display: grid; grid-template-columns: 8.5rem minmax(0, 1fr); gap: .15rem .6rem; font-size: .86rem; }
+  .kv dt { color: var(--dim); }
+  .kv dd { margin: 0; overflow-wrap: anywhere; }
+  pre { margin: 0; background: var(--code); border: 1px solid var(--line); border-radius: 6px;
+        padding: .6rem; overflow: auto; max-height: 26rem;
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  /* The traffic log: the same columns the terminal prints, in the same colours. */
+  .log { background: var(--code); border: 1px solid var(--line); border-radius: 8px;
+         padding: .5rem; height: 62vh; overflow: auto;
+         font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; line-height: 1.55; }
+  /* Columns wide enough for the usual values; a line that outgrows them
+     scrolls the log sideways rather than losing the end of a correlation id. */
+  .line { display: grid; grid-template-columns: 6.2rem 5rem 4.2rem 16rem 10rem 8.5rem 6.5rem 4.5rem 9rem 22rem;
+          gap: .55rem; white-space: nowrap; cursor: pointer; padding: 0 .25rem; border-radius: 4px;
+          width: max-content; min-width: 100%; }
+  .line:hover { background: var(--line); }
+  .line > span { overflow: hidden; text-overflow: ellipsis; }
+  .t, .id, .took, .http, .corr { color: var(--dim); }
+  .dir.out { color: var(--out); font-weight: 700; }
+  .dir.in { color: var(--in); font-weight: 700; }
+  .path, .peer { color: var(--accent); }
+  .st.good { color: var(--good); } .st.bad { color: var(--bad); } .st.warn { color: var(--warn); }
+  .flags { color: var(--warn); } .flags .err { color: var(--bad); }
+  table { border-collapse: collapse; width: 100%; font-size: .84rem; }
+  th, td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { color: var(--dim); font-weight: 600; font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: var(--card); }
+  .wrap { overflow-x: auto; }
+  .dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--dim); display: inline-block; }
+  .dot.on { background: var(--good); } .dot.off { background: var(--bad); }
+  #drawer { position: fixed; inset: 0 0 0 auto; width: min(46rem, 100vw); background: var(--card);
+            border-left: 1px solid var(--line); padding: .9rem; overflow: auto; box-shadow: -8px 0 24px rgba(0,0,0,.18); }
+  #drawer[hidden] { display: none; }
+  #drawer header { background: none; border: 0; padding: 0 0 .6rem; }
+  .err-box { color: var(--bad); font-size: .86rem; margin: .4rem 0; overflow-wrap: anywhere; }
+  .ok-box { color: var(--good); font-size: .86rem; margin: .4rem 0; }
+  form.inline { display: inline; }
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">nhcx adapter</span>
+  <span class="chip" id="c-env">…</span>
+  <span class="chip" id="c-participant"></span>
+  <span class="chip" id="c-version"></span>
+  <span class="grow"></span>
+  <span class="chip"><span class="dot" id="c-live"></span> live</span>
+  <form class="inline" method="post" action="{{BASE}}/logout"><button class="act">sign out</button></form>
+</header>
+
+<nav id="tabs">
+  <button data-view="live" aria-selected="true">Live</button>
+  <button data-view="ledger" aria-selected="false">Ledger</button>
+  <button data-view="send" aria-selected="false">Send</button>
+  <button data-view="lookup" aria-selected="false">Lookup</button>
+  <button data-view="setup" aria-selected="false">Setup</button>
+</nav>
+
+<main>
+  <section id="view-live">
+    <div class="bar">
+      <select id="f-direction"><option value="">both ways</option><option value="out">out</option><option value="in">in</option></select>
+      <select id="f-status"><option value="">any outcome</option><option>accepted</option><option>delivered</option><option>rejected</option><option>failed</option><option>delivery_failed</option></select>
+      <input id="f-entity" placeholder="entity (preauth…)" size="14">
+      <input id="f-participant" placeholder="participant code" size="16">
+      <input id="f-correlation" placeholder="correlation id" size="22">
+      <button class="act" id="live-apply">apply</button>
+      <button class="act" id="live-pause">pause</button>
+      <button class="act" id="live-clear">clear</button>
+      <span class="grow"></span>
+      <span class="muted" id="live-note"></span>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+
+  <section id="view-ledger" hidden>
+    <div class="bar">
+      <select id="q-direction"><option value="">both ways</option><option value="out">out</option><option value="in">in</option></select>
+      <select id="q-kind"><option value="">request + response</option><option>request</option><option>response</option></select>
+      <select id="q-status"><option value="">any outcome</option><option>accepted</option><option>delivered</option><option>rejected</option><option>failed</option><option>delivery_failed</option></select>
+      <input id="q-entity" placeholder="entity" size="12">
+      <input id="q-participant" placeholder="participant" size="16">
+      <input id="q-correlation" placeholder="correlation id" size="22">
+      <input id="q-since" placeholder="since (24h, 2026-08-31)" size="18">
+      <input id="q-limit" type="number" min="1" max="500" value="50" size="4" title="limit">
+      <button class="act primary" id="q-run">search</button>
+      <span class="muted" id="q-note"></span>
+    </div>
+    <div class="wrap"><table id="q-table">
+      <thead><tr><th>time</th><th>id</th><th>dir</th><th>path</th><th>counterparty</th><th>outcome</th><th>http</th><th>took</th><th>correlation</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <div class="bar" style="margin-top:.6rem"><button class="act" id="q-more" hidden>load older</button></div>
+  </section>
+
+  <section id="view-send" hidden>
+    <div class="grid">
+      <div class="card">
+        <h2>message</h2>
+        <div class="kv">
+          <dt><label for="s-path">path</label></dt><dd><input id="s-path" list="paths" placeholder="v1/preauth/submit" style="width:100%"></dd>
+          <dt><label for="s-recipient">recipient</label></dt><dd><input id="s-recipient" placeholder="1000004805@hcx" style="width:100%"></dd>
+          <dt><label for="s-sender">sender</label></dt><dd><input id="s-sender" placeholder="(this adapter)" style="width:100%"></dd>
+          <dt><label for="s-correlation">correlation id</label></dt><dd><input id="s-correlation" placeholder="(new, or the one being answered)" style="width:100%"></dd>
+          <dt><label for="s-workflow">workflow id</label></dt><dd><input id="s-workflow" style="width:100%"></dd>
+          <dt><label for="s-status">x-hcx-status</label></dt><dd><input id="s-status" placeholder="(derived from the path)" style="width:100%"></dd>
+        </div>
+        <datalist id="paths">
+          <option>v1/coverageeligibility/check</option><option>v1/coverageeligibility/on_check</option>
+          <option>v1/preauth/submit</option><option>v1/preauth/on_submit</option>
+          <option>v1/claim/submit</option><option>v1/claim/on_submit</option>
+          <option>v1/communication/request</option><option>v1/communication/on_request</option>
+          <option>v1/paymentnotice/request</option><option>v1/paymentnotice/on_request</option>
+          <option>v1/status/check</option><option>v1/status/on_check</option>
+        </datalist>
+        <div class="bar" style="margin-top:.7rem">
+          <button class="act primary" id="s-send">send</button>
+          <button class="act" id="s-sample">insert a sample bundle</button>
+          <button class="act" id="s-format">format json</button>
+        </div>
+        <div id="s-msg"></div>
+      </div>
+      <div class="card">
+        <h2>fhir bundle</h2>
+        <textarea id="s-body" spellcheck="false" placeholder='{"resourceType": "Bundle", …}'></textarea>
+      </div>
+    </div>
+    <div class="card" id="s-result" hidden><h2>result</h2><pre id="s-result-body"></pre></div>
+  </section>
+
+  <section id="view-lookup" hidden>
+    <div class="bar">
+      <input id="l-code" placeholder="participant code, e.g. 1000004805@hcx" size="30">
+      <label class="muted"><input type="checkbox" id="l-refresh"> ask the registry again</label>
+      <button class="act primary" id="l-go">look up</button>
+      <span class="muted" id="l-note"></span>
+    </div>
+    <div class="grid">
+      <div class="card"><h2>registry record</h2><div id="l-record"></div></div>
+      <div class="card"><h2>encryption certificate</h2><pre id="l-cert">—</pre></div>
+    </div>
+  </section>
+
+  <section id="view-setup" hidden>
+    <div class="grid">
+      <div class="card"><h2>adapter</h2><div id="o-adapter"></div></div>
+      <div class="card"><h2>participants</h2><div id="o-participants"></div></div>
+      <div class="card"><h2>session token</h2><div id="o-token"></div>
+        <div class="bar" style="margin-top:.6rem">
+          <button class="act" id="t-refresh">mint a new one</button>
+          <button class="act" id="t-show">reveal</button>
+        </div>
+        <pre id="t-body" hidden></pre>
+      </div>
+      <div class="card"><h2>ledger</h2><div id="o-ledger"></div></div>
+    </div>
+    <div class="card">
+      <h2>danger</h2>
+      <div class="bar">
+        <span class="muted">Deleting every recorded message cannot be undone.</span>
+        <input id="d-confirm" placeholder="type: clear" size="12">
+        <button class="act danger" id="d-clear">clear the ledger</button>
+        <span id="d-msg"></span>
+      </div>
+    </div>
+  </section>
+</main>
+
+<aside id="drawer" hidden>
+  <header class="bar">
+    <strong id="d-title">entry</strong>
+    <span class="grow"></span>
+    <button class="act" id="d-thread">thread</button>
+    <button class="act" id="d-close">close</button>
+  </header>
+  <div id="d-body"></div>
+</aside>
+
+<script>
+"use strict";
+const BASE = "{{BASE}}";
+
+// ---- plumbing ------------------------------------------------------------
+// Everything the ledger holds came off the wire, so nothing is ever put into
+// the page as markup: el() sets text, and that is the only way text gets in.
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined && text !== null) e.textContent = String(text);
+  return e;
+}
+function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+function $(id) { return document.getElementById(id); }
+
+async function api(path, options) {
+  const opts = Object.assign({ headers: {} }, options || {});
+  opts.headers["X-Panel-Request"] = "1";
+  if (opts.body) opts.headers["Content-Type"] = "application/json";
+  const res = await fetch(BASE + path, opts);
+  if (res.status === 401) { location.reload(); throw new Error("signed out"); }
+  const text = await res.text();
+  let body = null;
+  try { body = text ? JSON.parse(text) : null; } catch (e) { body = { raw: text }; }
+  if (!res.ok) {
+    const err = (body && body.error && body.error.message) || ("HTTP " + res.status);
+    const e = new Error(err); e.body = body; throw e;
+  }
+  return body;
+}
+function note(node, text, bad) {
+  clear(node);
+  if (text) node.appendChild(el("span", bad ? "err-box" : "ok-box", text));
+}
+function localTime(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toTimeString().slice(0, 8) + "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+function localStamp(iso) {
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toLocaleString(undefined, { year: "2-digit", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+function statusClass(s) {
+  if (s === "accepted" || s === "delivered") return "st good";
+  if (s === "rejected" || s === "failed" || s === "delivery_failed") return "st bad";
+  return "st warn";
+}
+function peerOf(m) { return (m.direction === "in" ? m.sender : m.recipient) || "?"; }
+
+// ---- tabs ----------------------------------------------------------------
+const views = ["live", "ledger", "send", "lookup", "setup"];
+$("tabs").addEventListener("click", (ev) => {
+  const b = ev.target.closest("button"); if (!b) return;
+  for (const v of views) $("view-" + v).hidden = v !== b.dataset.view;
+  for (const t of $("tabs").children) t.setAttribute("aria-selected", String(t === b));
+  if (b.dataset.view === "setup") loadOverview();
+});
+
+// ---- live ----------------------------------------------------------------
+// One line per message, in the columns the terminal uses, so an operator who
+// knows the log knows this. The stream is server-sent events; the browser
+// reconnects on its own, and the backfill on reconnect fills the gap.
+const log = $("log");
+let source = null, paused = false, held = [], seen = new Set();
+
+function liveFilters() {
+  const q = new URLSearchParams();
+  const add = (k, v) => { if (v) q.set(k, v); };
+  add("direction", $("f-direction").value);
+  add("status", $("f-status").value);
+  add("entity", $("f-entity").value.trim());
+  add("participant", $("f-participant").value.trim());
+  add("correlation_id", $("f-correlation").value.trim());
+  return q;
+}
+
+function lineFor(m) {
+  const row = el("div", "line");
+  row.dataset.id = m.id;
+  row.appendChild(el("span", "t", localTime(m.created_at)));
+  row.appendChild(el("span", "id", m.id));
+  row.appendChild(el("span", "dir " + (m.direction === "in" ? "in" : "out"), m.direction === "in" ? "▼ IN" : "▲ OUT"));
+  row.appendChild(el("span", "path", m.path));
+  row.appendChild(el("span", "peer", (m.direction === "in" ? "← " : "→ ") + peerOf(m)));
+  row.appendChild(el("span", statusClass(m.status), m.status));
+  row.appendChild(el("span", "http", m.peer_status ? (m.direction === "in" ? "callback " : "nhcx ") + m.peer_status : ""));
+  row.appendChild(el("span", "took", m.duration_ms ? m.duration_ms + "ms" : ""));
+  const flags = el("span", "flags");
+  if (m.format && m.format !== "fhir") flags.appendChild(el("span", null, m.format + " "));
+  if (m.redelivery) flags.appendChild(el("span", null, "redelivery "));
+  if (m.error) flags.appendChild(el("span", "err", m.error.code));
+  row.appendChild(flags);
+  row.appendChild(el("span", "corr", m.correlation_id || ""));
+  return row;
+}
+
+function appendLine(m) {
+  if (seen.has(m.id)) return;
+  seen.add(m.id);
+  if (paused) { held.push(m); $("live-note").textContent = held.length + " held"; return; }
+  const atBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+  log.appendChild(lineFor(m));
+  while (log.childElementCount > 800) { seen.delete(log.firstChild.dataset.id); log.removeChild(log.firstChild); }
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+function connect() {
+  if (source) source.close();
+  seen = new Set(); held = []; clear(log);
+  const q = liveFilters(); q.set("backfill", "40");
+  source = new EventSource(BASE + "/api/stream?" + q.toString());
+  source.addEventListener("message", (ev) => { try { appendLine(JSON.parse(ev.data)); } catch (e) {} });
+  source.addEventListener("ready", () => { $("c-live").className = "dot on"; });
+  source.onerror = () => { $("c-live").className = "dot off"; };
+  source.onopen = () => { $("c-live").className = "dot on"; };
+}
+$("live-apply").onclick = connect;
+$("live-clear").onclick = () => { clear(log); seen = new Set(); held = []; $("live-note").textContent = ""; };
+$("live-pause").onclick = () => {
+  paused = !paused;
+  $("live-pause").textContent = paused ? "resume" : "pause";
+  if (!paused) { const q = held; held = []; $("live-note").textContent = ""; for (const m of q) { seen.delete(m.id); appendLine(m); } }
+};
+log.addEventListener("click", (ev) => {
+  const row = ev.target.closest(".line"); if (row) openEntry(row.dataset.id);
+});
+
+// ---- ledger --------------------------------------------------------------
+function ledgerQuery() {
+  const q = new URLSearchParams();
+  const add = (k, v) => { if (v) q.set(k, v); };
+  add("direction", $("q-direction").value);
+  add("kind", $("q-kind").value);
+  add("status", $("q-status").value);
+  add("entity", $("q-entity").value.trim());
+  add("participant", $("q-participant").value.trim());
+  add("correlation_id", $("q-correlation").value.trim());
+  add("since", $("q-since").value.trim());
+  add("limit", $("q-limit").value);
+  return q;
+}
+async function runQuery(before) {
+  const q = ledgerQuery();
+  if (before) q.set("before", before);
+  const body = $("q-table").querySelector("tbody");
+  if (!before) clear(body);
+  try {
+    const res = await api("/api/ledger?" + q.toString());
+    for (const m of res.items || []) body.appendChild(rowFor(m));
+    $("q-note").textContent = body.childElementCount + " shown";
+    const more = $("q-more");
+    more.hidden = !res.next_before;
+    more.dataset.before = res.next_before || "";
+  } catch (e) { $("q-note").textContent = e.message; }
+}
+function rowFor(m) {
+  const tr = el("tr");
+  tr.dataset.id = m.id;
+  const cells = [
+    [localStamp(m.created_at), "muted"], [m.id, null],
+    [m.direction === "in" ? "▼ in" : "▲ out", "dir " + m.direction],
+    [m.path, "path"], [peerOf(m), "peer"], [m.status, statusClass(m.status)],
+    [m.peer_status || "", "muted"], [m.duration_ms ? m.duration_ms + "ms" : "", "muted"],
+    [m.correlation_id || "", "muted"],
+  ];
+  for (const [text, cls] of cells) { const td = el("td", cls, text); tr.appendChild(td); }
+  return tr;
+}
+$("q-run").onclick = () => runQuery("");
+$("q-more").onclick = (ev) => runQuery(ev.target.dataset.before);
+$("q-table").addEventListener("click", (ev) => {
+  const tr = ev.target.closest("tr[data-id]"); if (tr) openEntry(tr.dataset.id);
+});
+
+// ---- drawer: one entry, and its thread ------------------------------------
+const drawer = $("drawer");
+let current = null;
+$("d-close").onclick = () => { drawer.hidden = true; };
+document.addEventListener("keydown", (ev) => { if (ev.key === "Escape") drawer.hidden = true; });
+$("d-thread").onclick = () => { if (current && current.correlation_id) openThread(current.correlation_id); };
+
+function kv(pairs) {
+  const dl = el("dl", "kv");
+  for (const [k, v] of pairs) {
+    if (v === undefined || v === null || v === "") continue;
+    dl.appendChild(el("dt", null, k));
+    dl.appendChild(el("dd", null, v));
+  }
+  return dl;
+}
+async function openEntry(id) {
+  drawer.hidden = false;
+  const body = $("d-body");
+  clear(body); $("d-title").textContent = id;
+  try {
+    const e = await api("/api/ledger/" + encodeURIComponent(id));
+    current = e;
+    body.appendChild(kv([
+      ["time", localStamp(e.created_at)],
+      ["direction", e.direction + " · " + e.kind + (e.format ? " · " + e.format : "")],
+      ["path", e.path],
+      ["outcome", e.status],
+      ["sender", e.sender], ["recipient", e.recipient],
+      ["correlation id", e.correlation_id], ["api call id", e.api_call_id],
+      ["request id", e.request_id], ["workflow id", e.workflow_id],
+      ["x-hcx-status", e.hcx_status],
+      ["took", e.duration_ms + " ms"],
+      ["redelivery", e.redelivery ? "yes" : ""],
+      ["error", e.error ? e.error.code + ": " + e.error.message : ""],
+      ["peer", e.peer ? e.peer.status_code + " " + e.peer.url : ""],
+    ]));
+    if (e.fhir_summary) {
+      const s = e.fhir_summary;
+      body.appendChild(el("h2", null, "bundle"));
+      body.appendChild(kv([
+        ["resource", s.resource_type + (s.bundle_type ? " / " + s.bundle_type : "")],
+        ["entries", s.entries], ["focus", s.focus], ["identifier", s.identifier],
+        ["patient", s.patient], ["outcome", s.outcome],
+      ]));
+    }
+    if (e.headers) body.appendChild(section("protected headers", JSON.stringify(e.headers, null, 2)));
+    if (e.peer && e.peer.response) body.appendChild(section("peer response", JSON.stringify(e.peer.response, null, 2)));
+    if (e.fhir) body.appendChild(section("fhir", JSON.stringify(e.fhir, null, 2)));
+  } catch (err) { body.appendChild(el("div", "err-box", err.message)); }
+}
+function section(title, text) {
+  const wrap = el("div");
+  wrap.appendChild(el("h2", null, title));
+  wrap.appendChild(el("pre", null, text));
+  return wrap;
+}
+async function openThread(cid) {
+  drawer.hidden = false;
+  const body = $("d-body");
+  clear(body); $("d-title").textContent = cid;
+  try {
+    const t = await api("/api/thread/" + encodeURIComponent(cid));
+    body.appendChild(kv([
+      ["state", t.state], ["entity", t.entity], ["role", t.role],
+      ["counterparty", t.counterparty], ["workflow id", t.workflow_id],
+      ["started", localStamp(t.started)], ["updated", localStamp(t.updated)],
+    ]));
+    const table = el("table");
+    const tbody = el("tbody");
+    for (const m of t.messages || []) tbody.appendChild(rowFor(m));
+    table.appendChild(tbody);
+    table.addEventListener("click", (ev) => {
+      const tr = ev.target.closest("tr[data-id]"); if (tr) openEntry(tr.dataset.id);
+    });
+    const wrap = el("div", "wrap"); wrap.appendChild(table);
+    body.appendChild(el("h2", null, "messages"));
+    body.appendChild(wrap);
+  } catch (err) { body.appendChild(el("div", "err-box", err.message)); }
+}
+
+// ---- send ----------------------------------------------------------------
+$("s-sample").onclick = () => {
+  $("s-body").value = JSON.stringify({
+    resourceType: "Bundle", type: "collection",
+    entry: [{ resource: { resourceType: "CoverageEligibilityRequest", id: "cer-1", status: "active",
+      purpose: ["validation"], created: new Date().toISOString() } }]
+  }, null, 2);
+};
+$("s-format").onclick = () => {
+  try { $("s-body").value = JSON.stringify(JSON.parse($("s-body").value), null, 2); note($("s-msg"), ""); }
+  catch (e) { note($("s-msg"), "that is not valid JSON: " + e.message, true); }
+};
+$("s-send").onclick = async () => {
+  let fhir;
+  try { fhir = JSON.parse($("s-body").value); }
+  catch (e) { note($("s-msg"), "the bundle is not valid JSON: " + e.message, true); return; }
+  const body = { path: $("s-path").value.trim(), fhir: fhir };
+  const opt = (k, v) => { if (v) body[k] = v; };
+  opt("recipient", $("s-recipient").value.trim());
+  opt("sender", $("s-sender").value.trim());
+  opt("correlation_id", $("s-correlation").value.trim());
+  opt("workflow_id", $("s-workflow").value.trim());
+  opt("status", $("s-status").value.trim());
+  note($("s-msg"), "sending…");
+  try {
+    const res = await api("/api/send", { method: "POST", body: JSON.stringify(body) });
+    $("s-result").hidden = false;
+    $("s-result-body").textContent = JSON.stringify(res, null, 2);
+    note($("s-msg"), res.ok ? "NHCX accepted it — " + res.ledger_id : "NHCX answered " + res.gateway_status, !res.ok);
+    if (res.correlation_id) $("s-correlation").value = res.correlation_id;
+  } catch (e) {
+    note($("s-msg"), e.message, true);
+    if (e.body) { $("s-result").hidden = false; $("s-result-body").textContent = JSON.stringify(e.body, null, 2); }
+  }
+};
+
+// ---- lookup --------------------------------------------------------------
+$("l-go").onclick = async () => {
+  const code = $("l-code").value.trim();
+  if (!code) return;
+  $("l-note").textContent = "asking the registry…";
+  clear($("l-record")); $("l-cert").textContent = "—";
+  try {
+    const q = new URLSearchParams({ code: code });
+    if ($("l-refresh").checked) q.set("refresh", "1");
+    const res = await api("/api/participant?" + q.toString());
+    const p = res.participant || {};
+    const rec = $("l-record");
+    clear(rec);
+    const dl = kv([
+      ["code", res.code], ["name", p.name],
+      ["roles", Array.isArray(p.roles) ? p.roles.join(", ") : p.roles],
+      ["endpoint", p.endpoint_url], ["status", p.status],
+      ["registry error", res.participant_error],
+    ]);
+    rec.appendChild(dl);
+    $("l-cert").textContent = res.certificate || res.certificate_error || "—";
+    $("l-note").textContent = "";
+  } catch (e) { $("l-note").textContent = e.message; }
+};
+
+// ---- setup ---------------------------------------------------------------
+async function loadOverview() {
+  try {
+    const o = await api("/api/overview");
+    $("c-env").textContent = o.env;
+    $("c-version").textContent = o.version;
+    const def = (o.participants || [])[0];
+    if (def) $("c-participant").textContent = def.code;
+    const ad = $("o-adapter"); clear(ad);
+    ad.appendChild(kv([
+      ["version", o.version], ["environment", o.env], ["listening on", o.listen],
+      ["public url", o.public_url], ["tls", o.tls ? "on this listener" : "no (proxy or plain http)"],
+      ["nhcx", o.nhcx], ["registry", o.registry], ["auth mode", o.auth_mode],
+      ["api key", o.api_key_required ? "required on /out" : "accepted, not demanded"],
+    ]));
+    const ps = $("o-participants"); clear(ps);
+    for (const p of o.participants || []) {
+      const card = el("div");
+      card.appendChild(kv([
+        ["code", p.code + (p.default ? "  (default)" : "")],
+        ["name", p.name], ["callback", p.callback],
+        ["session", p.token_valid ? "held" : "not held yet"],
+      ]));
+      ps.appendChild(card);
+    }
+    const tk = $("o-token"); clear(tk);
+    tk.appendChild(kv((o.participants || []).map((p) => [p.code, p.token_valid ? "session held" : "no session"])));
+    const lg = $("o-ledger"); clear(lg);
+    const st = o.stats || {};
+    const counts = (m) => Object.keys(m || {}).sort().map((k) => k + " " + m[k]).join(" · ");
+    lg.appendChild(kv([
+      ["enabled", o.ledger.enabled ? "yes" : "no"], ["directory", o.ledger.dir],
+      ["retention", o.ledger.retention_days ? o.ledger.retention_days + " days" : "forever"],
+      ["bundles", o.ledger.store_bodies ? "stored" : "headers only"],
+      ["messages", st.total], ["threads", st.threads], ["last 24h", st.last_24h],
+      ["direction", counts(st.by_direction)], ["outcome", counts(st.by_status)], ["entity", counts(st.by_entity)],
+      ["span", st.oldest ? localStamp(st.oldest) + " → " + localStamp(st.newest) : ""],
+    ]));
+  } catch (e) { $("c-env").textContent = e.message; }
+}
+$("t-refresh").onclick = async () => {
+  try { await api("/api/token/refresh", { method: "POST" }); loadOverview(); }
+  catch (e) { alert(e.message); }
+};
+$("t-show").onclick = async () => {
+  const pre = $("t-body");
+  if (!pre.hidden) { pre.hidden = true; return; }
+  try {
+    const t = await api("/api/token");
+    pre.textContent = "expires " + localStamp(t.expires_at) + " (" + t.expires_in + "s)\n\n" + t.token;
+    pre.hidden = false;
+  } catch (e) { pre.textContent = e.message; pre.hidden = false; }
+};
+$("d-clear").onclick = async () => {
+  if ($("d-confirm").value.trim() !== "clear") { note($("d-msg"), 'type "clear" first', true); return; }
+  try {
+    const res = await api("/api/ledger/clear", { method: "POST", body: JSON.stringify({ confirm: "clear" }) });
+    note($("d-msg"), res.cleared + " message(s) deleted");
+    $("d-confirm").value = "";
+    loadOverview();
+  } catch (e) { note($("d-msg"), e.message, true); }
+};
+
+// ---- go ------------------------------------------------------------------
+loadOverview();
+connect();
+runQuery("");
+</script>
+</body>
+</html>

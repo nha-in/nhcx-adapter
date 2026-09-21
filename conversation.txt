@@ -1,0 +1,94 @@
+ ▐▛███▛█   Claude Code v2.1.251
+▝▜██████▀  Opus 5 · Claude Max
+  ▝▝ ▝▝    ~/sbx/nhcx-adapter
+
+
+❯ 1. need the ledeger to be followed live like in server with colorus and all   
+  ⎿  Interrupted · What should Claude do instead?
+
+❯ 1. need the ledeger to be followed live like in server with colorus and all   
+  2. a miro web page at like pannel password protected to do everthing very     
+  simple minimal html but robust                                                
+
+● I'll start by understanding the project before building anything.
+
+  Searched for 3 patterns, read 3 files, listed 1 directory, ran 10 shell commands (ctrl+o to expand)
+
+● Now I have the full picture. Let me build part 1 — live ledger following.
+
+  Searched for 1 pattern, read 1 file, ran 11 shell commands (ctrl+o to expand)
+
+● Background command "Build and smoke-test follow" failed with exit code 144
+
+● Now the panel. First the Go side:
+
+  Searched for 2 patterns, read 8 files, listed 1 directory, ran 51 shell commands (ctrl+o to expand)
+● Now the config sample, tests, and docs:
+
+  Ran 18 shell commands (ctrl+o to expand)
+● Background command "Run adapter with panel in background" completed (exit code
+0)
+
+● Both pieces are built, tested, and verified against a running adapter. Here's
+  what changed.
+
+  1. Live ledger following — nhcx-adapter ledger follow
+
+  nhcx-adapter ledger follow [--tail N] [--direction out|in] [--entity E]
+  [--status S]
+                             [--participant CODE] [--correlation-id ID] [--json]
+
+  Prints the last few messages, then every one as it lands, in the exact line 
+  the server logs — verified on a pty: dim clock and ledger id, bold magenta ▲ 
+  OUT / blue ▼ IN, cyan path and participant, green accepted/delivered, red
+  failures, amber flags.
+
+  - internal/ledger/follow.go — Store.Follow tails the day files (index.jsonl
+    offsets, whole lines only), so it reads what another process writes: serve
+    in one terminal, follow in another. Survives UTC midnight rollover and a
+    ledger clear underneath it. Store.Subscribe is the in-process version, used
+    by the panel.
+  - internal/logfmt — the traffic renderer became an exported Message/Render, so
+    the server log and follow share one formatter rather than drifting.
+  - One deliberate change to existing output: the traffic line now shows the
+    ledger id after the timestamp (00:40:51.564 7UMU0009 ▲ OUT …) in both the
+    server log and follow, since that id is what ledger show and the panel take.
+    It's omitted entirely when the ledger is off.
+
+  2. Browser panel — /panel, password-protected
+
+  Off until you set one thing:
+
+  { "panel": { "password": "${NHCX_PANEL_PASSWORD}" } }
+
+  serve then logs panel url=http://127.0.0.1:8090/panel. One embedded HTML file,
+  vanilla JS, no framework, no CDN, no build step.
+
+  Live (SSE, same coloured lines, filters, pause) · Ledger (filters, paging,
+  click → full entry with headers/bundle/peer answer → thread and its state) ·
+  Send (the /out envelope as a form, same code path) · Lookup (registry record +
+  certificate) · Setup (config, per-participant session token with mint/reveal,
+  ledger stats, and clearing behind a typed confirmation).
+
+  Security: password only, constant-time compare; cookie signed with a key
+  minted at startup (restart = everyone signed out, nothing on disk),
+  HttpOnly/SameSite=Strict/Secure under TLS; every mutating call needs an
+  X-Panel-Request header a cross-site form can't send; 5 wrong passwords per
+  address → lockout doubling to 15 minutes; strict CSP; panel.path can't shadow
+  /in, /out, /ledger, … Ledger data is only ever inserted as text, never markup.
+
+  Verified: go vet + full tests (incl. -race) green; new tests cover
+  cross-process tailing, clear-while-following, subscribe/cancel, login + guard
+  + logout, the CSRF header, rate limiting, live SSE end-to-end, and
+  panel-off-without-password. Ran it against the real config on a spare port —
+  login, console, SSE and CSRF refusal all confirmed by curl, and I
+  screenshotted every tab headlessly, which caught two real CSS bugs (a
+  collapsed value column in Setup, truncated correlation ids in Live) that are
+  now fixed.
+
+  Also updated: config.sample.json, the config edit form (new Panel section),
+  CLI usage, and README (Panel section, ledger follow docs, config table). I did
+  not send any real NHCX traffic — the send path is covered by tests against
+  the fake exchange instead.
+
+✻ Sautéed for 33m 0s · done 1:16 AM

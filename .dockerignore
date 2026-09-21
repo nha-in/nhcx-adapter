@@ -1,0 +1,10 @@
+# Allow-list: only what the build needs. Keeps config.json, *.pem, data/ and
+# anything else local out of the build context and the image.
+*
+!go.mod
+!go.sum
+!main.go
+!internal/
+# embedded by main.go (config init)
+!config.sample.json
+!config.docker.json

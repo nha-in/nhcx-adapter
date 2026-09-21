@@ -1,0 +1,17 @@
+# build output
+nhcx-adapter
+nhcx-adapter.exe
+dist/
+
+# local config and key material — never commit these
+config.json
+.env
+*.pem
+*.pem.bak-*
+*.key
+*.crt
+
+.DS_Store
+
+# ledger records (contain FHIR bundles)
+data/

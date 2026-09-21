@@ -1,0 +1,17 @@
+# cp .env.example .env   # fill it in
+# docker compose run --rm nhcx-adapter cert generate   # first run only: key + certificate into ./data
+# docker compose up -d
+services:
+  nhcx-adapter:
+    image: ghcr.io/nha-in/nhcx-adapter:${NHCX_ADAPTER_TAG:-latest}
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    # On Linux the bind mount must be writable by this user: either
+    # `sudo chown -R 10001:10001 data` or set NHCX_UID/NHCX_GID to `id -u`/`id -g`.
+    user: "${NHCX_UID:-10001}:${NHCX_GID:-10001}"
+    volumes:
+      - ./data:/data
+    ports:
+      - "${NHCX_PORT:-8090}:8090"
+    stop_grace_period: 35s # serve drains in-flight requests for up to 30 s
