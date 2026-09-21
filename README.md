@@ -372,7 +372,8 @@ it at another repository.
 
 ### Docker
 
-Images for linux/amd64 and linux/arm64 are published to
+Images for linux/amd64, arm64, arm/v7, arm/v6, 386, ppc64le, s390x and
+riscv64 are published to
 `ghcr.io/nha-in/nhcx-adapter`: `:latest` and `:X.Y.Z` / `:X.Y` from release
 tags, `:main` and `:sha-<commit>` from every push to main.
 
@@ -421,13 +422,14 @@ tag instead.
 ```sh
 make build          # this machine
 make check          # vet + race tests
-make compile-all    # verify all 11 targets compile
+make compile-all    # verify all 14 targets compile
 make release        # package all targets into ./dist (+ SHA256SUMS)
 make docker         # container image nhcx-adapter:<version>
 ```
 
-Linux amd64/arm64/arm/386 · macOS amd64/arm64 · Windows amd64/arm64/386 ·
-FreeBSD amd64/arm64. CI runs the checks, packages every target, and builds,
+Linux amd64/arm64/arm/386/ppc64le/s390x/riscv64 · macOS amd64/arm64 ·
+Windows amd64/arm64/386 · FreeBSD amd64/arm64. CI runs the checks, packages
+each target as its own artifact, and builds,
 boots and pushes the container image on each push;
 `git tag v1.0.0 && git push origin v1.0.0` publishes them as a release. The
 archive name `nhcx-adapter_<tag>_<os>_<arch>.tar.gz|.zip` and the `SHA256SUMS`

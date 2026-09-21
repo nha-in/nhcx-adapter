@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
 #
 # nhcx-adapter container image.
 #
@@ -7,6 +8,11 @@
 #
 # The binary is cross-compiled on the build host (pure Go, CGO off), so a
 # multi-arch build needs no emulation: the runtime stage has no RUN steps.
+#
+#   docker buildx build --platform linux/amd64,linux/arm64,linux/arm/v7 .
+#
+# The secret-looking ENV lines below are empty placeholders the baked-in
+# config expands; real values come from --env-file at run time.
 
 ARG GO_VERSION=1.26
 
@@ -15,14 +21,15 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY . .
-ARG TARGETOS TARGETARCH
+ARG TARGETOS TARGETARCH TARGETVARIANT
 # .git is not in the build context; CI and `make docker` pass these in.
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILT_AT=
+# linux/arm/v6 and v7 → GOARM=6 / 7; empty (Go's default) elsewhere.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOARM="${TARGETVARIANT#v}" \
     go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.builtAt=${BUILT_AT}" \
       -o /out/nhcx-adapter . \

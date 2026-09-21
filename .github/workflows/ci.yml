@@ -11,41 +11,71 @@ permissions:
   contents: read
 
 jobs:
-  # Vet, race tests, and a compile of every release target.
+  # Vet and race tests. Every release target is compiled by build below.
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 } # git describe needs the tags
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with: { go-version-file: go.mod }
       - run: make check
-      - run: make compile-all
 
-  # Package every platform. On ordinary pushes the archives are attached to
-  # the workflow run (Actions → run → Artifacts); on a vX.Y.Z tag they go to
-  # the release below.
+  # One job per platform, each uploading its own archive (Actions → run →
+  # Artifacts → nhcx-adapter_<os>_<arch>). On a vX.Y.Z tag the release job
+  # below collects them all. Keep this list in step with DEFAULT_TARGETS in
+  # scripts/build.sh.
   build:
     needs: check
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - linux/amd64
+          - linux/arm64
+          - linux/arm
+          - linux/386
+          - linux/ppc64le
+          - linux/s390x
+          - linux/riscv64
+          - darwin/amd64
+          - darwin/arm64
+          - windows/amd64
+          - windows/arm64
+          - windows/386
+          - freebsd/amd64
+          - freebsd/arm64
+    name: build (${{ matrix.target }})
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with: { go-version-file: go.mod }
-      - run: make release
-      - uses: actions/upload-artifact@v4
+      - name: Package
+        id: pkg
+        run: |
+          ./scripts/build.sh "${{ matrix.target }}"
+          echo "name=nhcx-adapter_$(tr / _ <<<'${{ matrix.target }}')" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v7
         with:
-          name: nhcx-adapter-${{ github.ref_name }}
+          name: ${{ steps.pkg.outputs.name }}
           path: |
             dist/*.tar.gz
             dist/*.zip
-            dist/SHA256SUMS
           if-no-files-found: error
 
-  # Container image for linux/amd64 + linux/arm64. Every run builds it and
-  # boots it; pushes to ghcr.io go out on main (:main, :sha-…) and on vX.Y.Z
-  # tags (:X.Y.Z, :X.Y, :latest). Pull requests build and test only.
+  # Container image for every Linux platform alpine ships. Every run builds
+  # it and boots the amd64 one; pushes to ghcr.io go out on main (:main,
+  # :sha-…) and on vX.Y.Z tags (:X.Y.Z, :X.Y, :latest). Pull requests build
+  # and test only.
+  #
+  # Pushing needs the repository to be allowed to write the package:
+  #   - Org → Settings → Packages: members may create packages, and
+  #   - if ghcr.io/<org>/nhcx-adapter already exists: Package settings →
+  #     Manage Actions access → add this repository with the Write role.
+  # Or set the secrets GHCR_USERNAME / GHCR_TOKEN (a token with
+  # write:packages) and the push uses those instead of GITHUB_TOKEN.
   docker:
     needs: check
     runs-on: ubuntu-latest
@@ -53,7 +83,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       - name: Version
         id: v
@@ -61,8 +91,8 @@ jobs:
           echo "version=$(git describe --tags --always --dirty)" >> "$GITHUB_OUTPUT"
           echo "commit=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
           echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/metadata-action@v5
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/metadata-action@v6
         id: meta
         with:
           images: ghcr.io/${{ github.repository }}
@@ -73,7 +103,7 @@ jobs:
             type=ref,event=pr
             type=sha
       - name: Build for the smoke test
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           load: true
@@ -111,17 +141,17 @@ jobs:
           test -n "$ok"
           echo "$body"
           echo "$body" | grep -q '"version":"${{ steps.v.outputs.version }}"'
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: github.event_name != 'pull_request'
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          username: ${{ secrets.GHCR_USERNAME || github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6,linux/386,linux/ppc64le,linux/s390x,linux/riscv64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -141,10 +171,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
-          name: nhcx-adapter-${{ github.ref_name }}
+          pattern: nhcx-adapter_*
           path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS && cat SHA256SUMS
       - name: Release body
         run: |
           {
@@ -169,16 +202,19 @@ jobs:
                 arm64) arch="ARM64 (Apple silicon / Graviton)" ;;
                 arm)   arch="ARMv7 (32-bit)" ;;
                 386)   arch="x86 (32-bit)" ;;
+                ppc64le) arch="POWER (ppc64le)" ;;
+                s390x)   arch="IBM Z (s390x)" ;;
+                riscv64) arch="RISC-V 64" ;;
               esac
               echo "| $os · $arch | \`$base\` |"
             done
             echo
             echo "Verify a download with \`sha256sum -c SHA256SUMS --ignore-missing\`."
             echo
-            echo "Container image: \`docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}\` (linux/amd64, linux/arm64)."
+            echo "Container image: \`docker pull ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME#v}\` (linux/amd64, arm64, arm/v7, arm/v6, 386, ppc64le, s390x, riscv64)."
           } > body.md
           cat body.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           name: nhcx-adapter ${{ github.ref_name }}
           body_path: body.md

@@ -14,6 +14,7 @@ cd "$(dirname "$0")/.."
 
 DEFAULT_TARGETS=(
   linux/amd64 linux/arm64 linux/arm linux/386
+  linux/ppc64le linux/s390x linux/riscv64
   darwin/amd64 darwin/arm64
   windows/amd64 windows/arm64 windows/386
   freebsd/amd64 freebsd/arm64
